@@ -65,15 +65,15 @@ def collect_rollout(env, policy, cfg, obs, device):
     
     return batch, obs, episode_returns
 
-def compute_gae(rewards, values, dones, last_values, gamma, gae_lambda):
+def compute_gae(rewards, values, dones, last_value, gamma, gae_lambda):
     """Generalized Advantage Estimation"""
     
     T = len(rewards)
-    advantages = np.zero(T, dtype=np.float32)
+    advantages = np.zeros(T, dtype=np.float32)
     gae = 0.0
     
     for t in reversed(range(T)):
-        next_value = values[t + 1]
+        next_value = values[t + 1] if t + 1 < T else last_value
         mask = 1 - dones[t]
         delta = rewards[t] + gamma * next_value * mask - values[t]
         gae = delta + gamma * gae_lambda * mask * gae
