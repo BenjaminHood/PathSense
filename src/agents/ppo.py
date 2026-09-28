@@ -13,7 +13,7 @@ def collect_rollout(env, policy, cfg, obs, device):
     
     T = cfg.rollout_steps
     obs_buf = np.zeros((T, int(np.prod(env.observation_space.shape))), dtype=np.float32)
-    act_buf = np.zero((T,) + policy.action_shape, dtype=policy.action_dtype)
+    act_buf = np.zeros((T,) + policy.action_shape, dtype=policy.action_dtype)
     logp_buf = np.zeros(T, dtype=np.float32)
     rew_buf = np.zeros(T, dtype=np.float32)
     val_buf = np.zeros(T, dtype=np.float32)
@@ -39,11 +39,11 @@ def collect_rollout(env, policy, cfg, obs, device):
         
         # if the episode ended with termination compute the 
         # value for the next state
-        if terminated and not truncated:
+        if truncated and not terminated:
             with torch.no_grad():
                 final = torch.as_tensor(next_obs, dtype=torch.float32, device=device).unsqueeze(0)
-                _, boot = policy.act(final)[2], None
-            rew_buf += cfg.gamma * float(_)
+                bootstrap = policy.act(final)[2]
+            rew_buf[t] += cfg.gamma * bootstrap.item()
             
         # reset the env if the epi is terminated or truncated
         if terminated or truncated:
@@ -55,10 +55,10 @@ def collect_rollout(env, policy, cfg, obs, device):
         
     with torch.no_grad():
         last = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-        last_value = policy.act(final)[2].item()
+        last_value = policy.act(last)[2].item()
         
     batch = {
-        "Obs": obs_buf, "Action": act_buf, "logp": logp_buf,
+        "obs": obs_buf, "actions": act_buf, "logp_old": logp_buf,
         "rewards": rew_buf, "values": val_buf, "dones": done_buf,
         "last_value": last_value
     }
@@ -92,30 +92,27 @@ def ppo_update(policy, optimizer, batch, advantages, returns, cfg, device):
     
     n = len(obs)
     idx = np.arange(n)
-    stats = {}
+    batch_stats = []
     
     for _ in range(cfg.epochs):
         np.random.shuffle(idx)
-        for start in range(0, cfg.minibatch_size):
+        for start in range(0, n, cfg.minibatch_size):
             mb = idx[start:start + cfg.minibatch_size]
             
             mb_adv = advantages[mb]
-            mb_adv = (mb_adv - mb_adv.evaluate(obs[mb], actions[mb]))
+            mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
             
             logp, entropy, values = policy.evaluate(obs[mb], actions[mb])
             
-            # TODO: policy loss
-            #   ratio       = torch.exp(logp - logp_old[mb])
-            #   unclipped   = ratio * mb_adv
-            #   clipped     = torch.clamp(ratio, 1 - cfg.clip_eps, 1 + cfg.clip_eps) * mb_adv
-            #   policy_loss = -torch.min(unclipped, clipped).mean()
-            #
             # The minus sign: the PPO objective is maximised, so the loss is its
             # negation. The min is ELEMENTWISE, applied before the mean.
-            policy_loss = None
+            ratio       = torch.exp(logp - logp_old[mb])
+            unclipped   = ratio * mb_adv
+            clipped     = torch.clamp(ratio, 1 - cfg.clip_eps, 1 + cfg.clip_eps) * mb_adv
+            policy_loss = -torch.min(unclipped, clipped).mean()
 
             # TODO: value loss -- mean squared error between values and returns[mb]
-            value_loss = None
+            value_loss = ((values - returns[mb]) ** 2).mean()
             
             entropy_loss = -entropy.mean()
             loss = policy_loss + cfg.value_coef * value_loss + cfg.entropy_coef * entropy_loss
@@ -126,16 +123,16 @@ def ppo_update(policy, optimizer, batch, advantages, returns, cfg, device):
             optimizer.step()
             
             with torch.no_grad():
-                log_ratio = logp - log_ratio[mb]
+                log_ratio = logp - logp_old[mb]
                 ratio = log_ratio.exp()
-                stats = {
+                batch_stats.append({
                     "entropy": entropy.mean().item(),
                     "approx_kl": ((ratio - 1) - log_ratio).mean().item(),
                     "clip_frac": ((ratio - 1).abs() > cfg.clip_eps).float().mean().item(),
                     "value_loss": value_loss.item(),
-                }
+                })
 
-    return stats
+    return {k: float(np.mean([s[k] for s in batch_stats])) for k in batch_stats[0]}
 
 def explained_variance(values, returns):
     var = np.var(returns)
@@ -170,9 +167,13 @@ def train(cfg: PPOConfig):
         
         advantages, returns = compute_gae(
             batch["rewards"], batch["values"], batch["dones"],
-            batch["last_values"], cfg.gamma, cfg.gae_lambda
+            batch["last_value"], cfg.gamma, cfg.gae_lambda
         )
         
+        # print(f"  ret min {returns.min():.1f} max {returns.max():.1f} "
+        # f"mean {returns.mean():.1f} | rew max {batch['rewards'].max():.1f}")
+        
+        ev = explained_variance(batch["values"], returns)
         stats = ppo_update(policy, optimizer, batch, advantages, returns, cfg, device)
         
         if recent:
@@ -180,14 +181,14 @@ def train(cfg: PPOConfig):
         else:
             mean_ret = float("nan")
             
-        pprint(
+        print(
             f"steps {steps:>7} | return {mean_ret:7.1f} | "
-            f"entropy {stats['entropy']:.3f} | k1 {stats['approx_kl']:.4f} | "
-            f"clip {stats['clip_frac']:.3f} | ev {explained_variance(batch['values'])}"
+            f"entropy {stats['entropy']:.3f} | kl {stats['approx_kl']:.4f} | "
+            f"clip {stats['clip_frac']:.3f} | ev {ev:.3f}"
         )
         
-        env.close()
-        return policy
+    env.close()
+    return policy
 
 if __name__ == "__main__":
     train(PPOConfig())
