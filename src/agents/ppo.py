@@ -68,8 +68,20 @@ def collect_rollout(env, policy, cfg, obs, device):
 def compute_gae(rewards, values, dones, last_values, gamma, gae_lambda):
     """Generalized Advantage Estimation"""
     
-    # TODO: implement
-    raise NotImplementedError
+    T = len(rewards)
+    advantages = np.zero(T, dtype=np.float32)
+    gae = 0.0
+    
+    for t in reversed(range(T)):
+        next_value = values[t + 1]
+        mask = 1 - dones[t]
+        delta = rewards[t] + gamma * next_value * mask - values[t]
+        gae = delta + gamma * gae_lambda * mask * gae
+        advantages[t] = gae
+        
+    returns = advantages + values
+    return advantages, returns.astype(np.float32)
+    
 
 def ppo_update(policy, optimizer, batch, advantages, returns, cfg, device):
     obs = torch.as_tensor(batch["obs"], device=device)
