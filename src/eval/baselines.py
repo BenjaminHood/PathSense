@@ -33,3 +33,11 @@ def run_episodes(policy_fn, env, n_episodes=100, seed=0):
 
 def random_policy(env):
     return lambda obs: env.action_space.sample()
+
+if __name__ == "__main__":
+    from src.envs.pathsense_env import PathSenseEnv
+    from src.envs.config import EnvConfig
+
+    env = PathSenseEnv(EnvConfig())
+    metrics = run_episodes(random_policy(env), env, n_episodes=100)
+    print("random:", metrics)
