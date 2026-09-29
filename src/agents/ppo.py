@@ -3,6 +3,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
+import os
 
 from .config import PPOConfig
 from .policies import make_policy
@@ -144,17 +145,20 @@ def explained_variance(values, returns):
         
     return variance
 
-def train(cfg: PPOConfig):
+def train(cfg: PPOConfig, env=None):
     """Train the PPO"""
 
     device = torch.device("cpu")
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     
-    env = gym.make(cfg.env_id)
+    env = env or gym.make(cfg.env_id)
     obs, _ = env.reset(seed=cfg.seed)
     
     policy = make_policy(env.observation_space, env.action_space, cfg).to(device)
+    # ckpt = torch.load("artifacts/policy.pt")
+    # policy.load_state_dict(ckpt["policy"])
+    
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.lr, eps=1e-5)
     
     steps = 0
@@ -188,7 +192,14 @@ def train(cfg: PPOConfig):
         )
         
     env.close()
-    return policy
+    
+    os.makedirs("artifacts", exist_ok=True)
+    torch.save({
+        "policy": policy.state_dict(),
+        "cfg": cfg,
+    }, "artifacts/policy.pt")
+    
+    return policy, recent
 
 if __name__ == "__main__":
     train(PPOConfig())

@@ -3,7 +3,7 @@ import gymnasium as gym
 from gymnasium import spaces
  
 from ..common.types import Observation, N_RANGES, MAX_RANGE, OBS_DIM
-from ..agents.config import PPOConfig
+from .config import EnvConfig
 
 # Actions
 STAY_SILENT, CUE_LEFT, CUE_RIGHT, CUE_STOP, CUE_STRAIGHT = range(5)
@@ -49,7 +49,7 @@ class PathSenseEnv(gym.Env):
         super().__init__()
 
         # Config
-        self.cfg = cfg or PPOConfig()
+        self.cfg = cfg or EnvConfig()
 
         # 5 Discrete actions 
         self.action_space = spaces.Discrete(N_ACTIONS)
