@@ -67,7 +67,9 @@ pathsense/
 │   ├── common/
 │   │   ├── types.py      # THE CONTRACT — see §3
 │   │   └── logging.py
-│   ├── envs/             # Gymnasium envs, sim wrappers        [Track A]
+│   ├── envs/
+│   │   ├── config.py     # EnvConfig                           [Track A]
+│   │   ├── pathsense_env.py   # Gymnasium env                  [Track A]
 │   ├── agents/
 │   │   ├── config.py     # PPOConfig
 │   │   ├── policies.py   # ActorCritic family, make_policy()   [Track B]
@@ -161,7 +163,7 @@ Nobody imports from another track's package. All three import `common.types`. Th
 Produces a Gymnasium-compatible env whose `observation_space` matches `OBS_DIM` and whose `step()` accepts the action encoding agreed in §6.
 
 ```python
-class NavEnv(gym.Env):
+class PathSenseEnv(gym.Env):
     def reset(self, seed=None, options=None) -> tuple[np.ndarray, dict]: ...
     def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict]: ...
 ```
