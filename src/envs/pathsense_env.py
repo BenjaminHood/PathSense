@@ -2,7 +2,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
  
-from ..common.types import Observation, N_RANGES, MAX_RANGE, OBS_DIM
+from ..common.types import Observation, Pose, N_RANGES, MAX_RANGE, OBS_DIM
 from .config import EnvConfig
 
 # Actions
@@ -87,7 +87,10 @@ class PathSenseEnv(gym.Env):
         self.prev_dist_to_goal = self._dist_to_goal()
  
         obs = self._build_observation()
-        info = {"pose": (self.pos[0], self.pos[1], self.heading)}
+        info = {
+            "pose": Pose(float(self.pos[0]), float(self.pos[1]), float(self.heading)),
+            "collision": False,
+        }
 
         return obs.to_array(), info
 
@@ -155,7 +158,8 @@ class PathSenseEnv(gym.Env):
         # 5. Proximity / termination checks.
         clearance = self._min_obstacle_clearance()
         terminated = False
-        if clearance <= cfg.collision_margin:
+        collision = bool(clearance <= cfg.collision_margin)
+        if collision:
             reward += cfg.reward_collision
             terminated = True
         elif clearance <= cfg.near_miss_margin:
@@ -169,7 +173,8 @@ class PathSenseEnv(gym.Env):
  
         obs = self._build_observation()
         info = {
-            "pose": (self.pos[0], self.pos[1], self.heading),
+            "pose": Pose(float(self.pos[0]), float(self.pos[1]), float(self.heading)),
+            "collision": collision,
             "dist_to_goal": dist,
             "compliance_prob": self.compliance_prob,
             "reaction_delay": self.reaction_delay,
@@ -230,7 +235,7 @@ class PathSenseEnv(gym.Env):
  
 if __name__ == "__main__":
     # Smoke test: random policy for a couple of episodes.
-    env = PathSenseEnv()
+    env = PathSenseEnv(EnvConfig())
     for ep in range(2):
         obs, info = env.reset(seed=ep)
         total = 0.0
