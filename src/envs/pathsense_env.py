@@ -9,7 +9,7 @@ from .config import EnvConfig
 STAY_SILENT, CUE_LEFT, CUE_RIGHT, CUE_STOP, CUE_STRAIGHT = range(5)
 N_ACTIONS = 5
 
-TURN_STEP = np.deg2rad(30.0)
+TURN_STEP = np.deg2rad(45.0)
 REPEAT_WINDOW = 15
 
 def _ray_circle_hit(origin, direction, center, radius):
