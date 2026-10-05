@@ -69,8 +69,10 @@ class PathSenseEnv(gym.Env):
             self._rng = np.random.default_rng(seed)
         cfg = self.cfg
  
-        self.pos = np.array([1.0, cfg.arena_size / 2.0], dtype=np.float64)
-        self.heading = 0.0
+        # self.pos = np.array([1.0, cfg.arena_size / 2.0], dtype=np.float64)
+        # self.heading = 0.0
+        self.pos = self._rng.uniform(2.0, cfg.arena_size - 2.0, size=2)
+        self.heading = self._rng.uniform(-np.pi, np.pi)
         self.goal = self._sample_goal()
         self.obstacles = self._sample_obstacles()
  
