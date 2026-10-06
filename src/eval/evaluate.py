@@ -1,6 +1,8 @@
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
+from src.eval.plots import plot_eval
 from src.agents.config import PPOConfig
 from src.agents.policies import make_policy
 from src.envs.config import EnvConfig
@@ -24,11 +26,25 @@ def greedy(policy):
             return int(policy._dist(obs_t).probs.argmax().item())
     return act
 
+def sampled(policy):
+    def act(obs):
+        with torch.no_grad():
+            obs_t = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
+            action, _, _ = policy.act(obs_t)
+            return int(action.item())
+    return act
+
 
 if __name__ == "__main__":
     env = PathSenseEnv(EnvConfig())
-
-    print("random:", run_episodes(random_policy(env), env, n_episodes=100))
-
     policy = load_policy(env)
-    print("ppo:   ", run_episodes(greedy(policy), env, n_episodes=100))
+    results = {
+        "Random":        run_episodes(random_policy(env), env, n_episodes=100),
+        "PPO (greedy)":  run_episodes(greedy(policy), env, n_episodes=100),
+        "PPO (sampled)": run_episodes(sampled(policy), env, n_episodes=100),
+    }
+    for k, v in results.items():
+        print(f"{k:16s} {v}")
+
+    plot_eval(results)
+    plt.show()
