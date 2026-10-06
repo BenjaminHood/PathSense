@@ -4,10 +4,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import os
+import json
 
 from .config import PPOConfig
 from .policies import make_policy
 from pprint import pp, pprint
+from src.eval.train_plot import LiveTrainingPlot
 
 def collect_rollout(env, policy, cfg, obs, device):
     """Run the policy for the rollout steps and return a batch of transitions"""
@@ -145,7 +147,7 @@ def explained_variance(values, returns):
         
     return variance
 
-def train(cfg: PPOConfig, env=None):
+def train(cfg: PPOConfig, env=None, block=True):
     """Train the PPO"""
 
     device = torch.device("cpu")
@@ -163,6 +165,7 @@ def train(cfg: PPOConfig, env=None):
     
     steps = 0
     recent = []
+    plot = LiveTrainingPlot(f"PathSense — PPO ({cfg.env_id})") if live else None
     
     while steps < cfg.total_steps:
         batch, obs, ep_returns = collect_rollout(env, policy, cfg, obs, device)
@@ -185,6 +188,16 @@ def train(cfg: PPOConfig, env=None):
         else:
             mean_ret = float("nan")
             
+        if plot:
+            plot.update({
+                "steps": steps,
+                "return": float(mean_ret),
+                "entropy": stats["entropy"],
+                "approx_kl": stats["approx_kl"],
+                "clip_frac": stats["clip_frac"],
+                "ev": float(ev),
+            })
+            
         print(
             f"steps {steps:>7} | return {mean_ret:7.1f} | "
             f"entropy {stats['entropy']:.3f} | kl {stats['approx_kl']:.4f} | "
@@ -193,11 +206,14 @@ def train(cfg: PPOConfig, env=None):
         
     env.close()
     
+    history = plot.close(block=block) if plot else []
     os.makedirs("artifacts", exist_ok=True)
     torch.save({
         "policy": policy.state_dict(),
         "cfg": cfg,
     }, "artifacts/policy.pt")
+    with open(cfg.save_path.replace(".pt", "_history.json"), "w") as f:
+        json.dump(history, f)
     
     return policy, recent
 
