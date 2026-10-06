@@ -32,6 +32,7 @@ class PPOConfig:
     
     seed: int = 0
     log_every: int = 1
+    save_path: str = "artifacts/policy.pt"
     
     def __post_init__(self):
         self.hidden_sizes = tuple(self.hidden_sizes)

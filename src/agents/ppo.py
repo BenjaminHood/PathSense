@@ -147,7 +147,7 @@ def explained_variance(values, returns):
         
     return variance
 
-def train(cfg: PPOConfig, env=None, block=True):
+def train(cfg: PPOConfig, env=None, live=True, block=True):
     """Train the PPO"""
 
     device = torch.device("cpu")
@@ -165,6 +165,7 @@ def train(cfg: PPOConfig, env=None, block=True):
     
     steps = 0
     recent = []
+    env_name = cfg.env_id if env is None else type(env).__name__
     plot = LiveTrainingPlot(f"PathSense — PPO ({cfg.env_id})") if live else None
     
     while steps < cfg.total_steps:
@@ -208,10 +209,7 @@ def train(cfg: PPOConfig, env=None, block=True):
     
     history = plot.close(block=block) if plot else []
     os.makedirs("artifacts", exist_ok=True)
-    torch.save({
-        "policy": policy.state_dict(),
-        "cfg": cfg,
-    }, "artifacts/policy.pt")
+    torch.save({"policy": policy.state_dict(), "cfg": cfg}, cfg.save_path)
     with open(cfg.save_path.replace(".pt", "_history.json"), "w") as f:
         json.dump(history, f)
     

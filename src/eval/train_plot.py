@@ -65,29 +65,31 @@ class LiveTrainingPlot:
     def update(self, record):
         self.history.append(record)
         self.n += 1
-        if not self.live or self.n % self.every:
+        if self.n % self.every:
             return
+        self._refresh()
+        if self.live:
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
+            plt.pause(0.001)
 
+    def _refresh(self):
         steps = [h["steps"] for h in self.history]
         for key, lines in self.lines.items():
             y = [h[key] for h in self.history]
             lines[0].set_data(steps, y)
             if len(lines) > 1:
                 lines[1].set_data(steps, _smooth(y))
-
         for ax in self.axes:
             ax.relim()
             ax.autoscale_view()
 
-        self.fig.canvas.draw_idle()
-        self.fig.canvas.flush_events()
-        plt.pause(0.001)
-
     def close(self, name="training_nav.png", block=False):
+        self._refresh()              # always — so the saved figure has data
         if self.live:
             plt.ioff()
         self.fig.canvas.draw_idle()
         _save(self.fig, name)
         if block and self.live:
-            plt.show()          # keeps the window open until you close it
+            plt.show()
         return self.history
