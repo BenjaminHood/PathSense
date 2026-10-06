@@ -9,7 +9,7 @@ from .config import EnvConfig
 STAY_SILENT, CUE_LEFT, CUE_RIGHT, CUE_STOP, CUE_STRAIGHT = range(5)
 N_ACTIONS = 5
 
-TURN_STEP = np.deg2rad(30.0)
+TURN_STEP = np.deg2rad(45.0)
 REPEAT_WINDOW = 15
 
 def _ray_circle_hit(origin, direction, center, radius):
@@ -69,10 +69,8 @@ class PathSenseEnv(gym.Env):
             self._rng = np.random.default_rng(seed)
         cfg = self.cfg
  
-        # self.pos = np.array([1.0, cfg.arena_size / 2.0], dtype=np.float64)
-        # self.heading = 0.0
-        self.pos = self._rng.uniform(2.0, cfg.arena_size - 2.0, size=2)
-        self.heading = self._rng.uniform(-np.pi, np.pi)
+        self.pos = np.array([1.0, cfg.arena_size / 2.0], dtype=np.float64)
+        self.heading = float(self._rng.uniform(-np.pi, np.pi))
         self.goal = self._sample_goal()
         self.obstacles = self._sample_obstacles()
  
@@ -98,11 +96,16 @@ class PathSenseEnv(gym.Env):
 
     def _sample_goal(self):
         cfg = self.cfg
-        return np.array(
-            [self._rng.uniform(cfg.arena_size * 0.6, cfg.arena_size - 1.0),
-             self._rng.uniform(1.0, cfg.arena_size - 1.0)],
-            dtype=np.float64,
-        )
+        min_dist = cfg.arena_size * 0.4
+        goal = None
+        for _ in range(50):
+            g = self._rng.uniform(1.0, cfg.arena_size - 1.0, size=2)
+            if np.linalg.norm(g - self.pos) >= min_dist:
+                goal = g
+                break
+        if goal is None:
+            goal = g  # arena too small for min_dist; fall back to last sample
+        return goal.astype(np.float64)
  
     def _sample_obstacles(self):
         cfg = self.cfg
