@@ -2,7 +2,7 @@ import numpy as np
 
 
 def run_episodes(policy_fn, env, n_episodes=100, seed=0):
-    """policy_fn(obs) -> action. Returns aggregate metrics."""
+   
     results = []
     for ep in range(n_episodes):
         obs, info = env.reset(seed=seed + ep)

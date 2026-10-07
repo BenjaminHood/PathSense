@@ -13,8 +13,7 @@ TURN_STEP = np.deg2rad(45.0)
 REPEAT_WINDOW = 15
 
 def _ray_circle_hit(origin, direction, center, radius):
-    """Distance along `direction` (unit vector) from `origin` to the nearest
-    intersection with a circle, or None if there isn't one ahead of us."""
+    
     oc = origin - center
     b = 2.0 * np.dot(direction, oc)
     c = np.dot(oc, oc) - radius * radius
@@ -28,7 +27,7 @@ def _ray_circle_hit(origin, direction, center, radius):
     return t if t > 1e-6 else None
 
 def _ray_box_hit(origin, direction, box_min, box_max):
-    """Distance to the arena boundary (axis-aligned box) along `direction`."""
+
     t_min, t_max = 0.0, np.inf
     for i in range(2):
         if abs(direction[i]) < 1e-9:

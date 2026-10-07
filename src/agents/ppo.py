@@ -12,7 +12,7 @@ from pprint import pp, pprint
 from src.eval.train_plot import LiveTrainingPlot
 
 def collect_rollout(env, policy, cfg, obs, device):
-    """Run the policy for the rollout steps and return a batch of transitions"""
+    
     
     T = cfg.rollout_steps
     obs_buf = np.zeros((T, int(np.prod(env.observation_space.shape))), dtype=np.float32)
