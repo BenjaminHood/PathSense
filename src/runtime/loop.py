@@ -1,29 +1,4 @@
-"""Real-time loop: capture → perceive → policy → guidance → speech.
 
-Timing model
-------------
-The policy was trained at the env's dt = 0.1 s per step, so its sense of
-time (reaction delays, the 15-step repeat window) is in 0.1 s units. The
-control loop therefore ticks at 10 Hz regardless of how fast depth runs.
-
-Depth is the slow stage (~50-300 ms on CPU), so it runs on its own worker
-thread and the loop reads the most recent range fan. Goal tracking (ArUco
-+ optical-flow yaw) is cheap and runs every tick on the newest frame.
-
-Latency budget (per tick, 100 ms):
-    frame age        ≤ 300 ms   else degraded
-    range-fan age    ≤ 500 ms   else degraded
-    goal fix         dead-reckoned between marker sightings
-    policy           < 1 ms (MLP)
-    speech           async, never blocks
-
-Graceful degradation
---------------------
-If the camera stalls, depth stops producing, or the goal is unknown, the
-loop does NOT feed stale data to the policy. It says "Stop" once (STOP is
-the only cue that bypasses the rate limiter), treats the user as stopped,
-and resumes normal control as soon as fresh data returns.
-"""
 import threading
 import time
 from dataclasses import dataclass
@@ -49,8 +24,7 @@ class RuntimeConfig:
 
 
 class CueSpeedModel:
-    """Speed as the sim reports it: walking unless last told to stop.
-    (Real speed isn't measured — see docs for the visual-odometry upgrade.)"""
+   
 
     def __init__(self, walking_speed: float):
         self.walking = walking_speed
@@ -68,8 +42,7 @@ class CueSpeedModel:
 
 
 class PerceptionWorker:
-    """Runs depth → ranges on the newest frame, on its own thread.
-    depth_model takes RGB (see perception/depth.py); cameras give BGR."""
+   
 
     def __init__(self, camera, depth_model, cam, fov_deg=120.0, clock=time.monotonic):
         self.camera, self.depth_model, self.cam = camera, depth_model, cam
@@ -138,7 +111,7 @@ class LiveLoop:
         return False
 
     def step(self) -> dict:
-        """One control tick. Returns a record for logging/eval."""
+        
         cfg = self.cfg
         dt = 1.0 / cfg.control_hz
         now = self.clock()

@@ -20,7 +20,7 @@ def mlp(in_dim: int, hidden_sizes, out_dim: int) -> nn.Sequential:
 
 
 class ActorCritic(nn.Module):
-    """Interface every policy must satisfy"""
+    
     
     is_discrete: bool
     action_shape: tuple
@@ -33,7 +33,7 @@ class ActorCritic(nn.Module):
         raise NotImplementedError
     
     def to_env_action(self, action: torch.Tensor):
-        """Convert a sampled action tensor into env.step()"""
+        
         raise NotImplementedError
     
 class CategoricalPolicy(ActorCritic):

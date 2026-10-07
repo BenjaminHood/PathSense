@@ -1,14 +1,4 @@
-"""Frame sources. All expose latest() -> (frame_bgr | None, timestamp_s).
 
-ThreadedCamera grabs continuously on its own thread and keeps ONLY the
-newest frame, so a slow consumer never processes a backlog of old frames
-(OpenCV's internal buffer otherwise adds hundreds of ms of lag).
-
-`source` is anything cv2.VideoCapture accepts: 0 for the default webcam,
-a video file, or a phone stream URL (e.g. the "IP Webcam" Android app
-serves http://<phone-ip>:8080/video). Meta glasses plug in here once
-OPEN-4 is resolved — they just need to provide latest().
-"""
 import threading
 import time
 
@@ -53,7 +43,7 @@ class ThreadedCamera:
 
 
 class StaticCamera:
-    """Serves a fixed frame (or None). For tests and dry runs."""
+ 
 
     def __init__(self, frame=None, clock=time.monotonic):
         self.frame = frame

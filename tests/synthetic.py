@@ -1,6 +1,4 @@
-"""Render a fake metric depth map for a simple scene: floor, a wall ahead,
-and vertical cylinders (the simulator's obstacles). Used to test the pipeline
-without a camera or a depth model."""
+
 import numpy as np
 
 

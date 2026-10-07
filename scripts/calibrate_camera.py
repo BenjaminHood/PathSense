@@ -1,7 +1,5 @@
-"""Step 2. Print a 9x6 checkerboard (inner corners), measure one square in metres.
-Take ~20 photos of it from different angles/distances into a folder, then:
-    python -m scripts.calibrate_camera photos/ --square 0.025 --out configs/camera.json
-"""
+
+ # A 9x6 checkerboard. measuring a one square in metres 
 import argparse, glob
 import cv2, numpy as np
 from src.perception.camera import CameraModel

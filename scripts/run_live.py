@@ -1,17 +1,4 @@
-"""Step 7. Camera -> depth -> Observation -> policy -> speech, at the sim's 10 Hz.
 
-    # calibrated webcam (Step 2), goal 10 m straight ahead
-    python -m scripts.run_live --camera configs/camera.json --goal 10,0
-
-    # phone over Wi-Fi ("IP Webcam" app), uncalibrated ultrawide, marker 0 at goal
-    python -m scripts.run_live --device http://192.168.1.20:8080/video --hfov 110 --marker-id 0
-
-    # no camera, no depth model: synthetic scene, checks the plumbing
-    python -m scripts.run_live --dry-run --goal 6,0 --max-seconds 5 --no-speech
-
---goal is in the agent frame: x metres forward, y metres LEFT. Keys: q quits (--show).
-Depth runs on its own thread; the control loop never waits for it (src/runtime/loop.py).
-"""
 import argparse
 import os
 import time

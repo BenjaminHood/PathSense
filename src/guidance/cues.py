@@ -1,13 +1,4 @@
-"""Policy action id -> spoken words. The ONLY place that decides what is said.
 
-WARNING: in the current sim, CUE_LEFT does heading -= 30 deg, which under the
-contract's +y = left turns the walker RIGHT (and CUE_RIGHT turns left).
-Until Track A fixes it, the words follow what the action actually DOES in sim.
-After the fix, set SIM_CUES_MIRRORED = False and re-train/re-test.
-
-Action ids mirror src/envs/pathsense_env.py (copied, not imported, to keep
-tracks independent); tests/test_camera_pipeline.py keeps them in sync.
-"""
 import time
 
 import numpy as np
@@ -29,7 +20,6 @@ else:
 
 
 def action_to_guidance(action: int) -> GuidanceAction:
-    """What the cue physically asks for. turn: radians, + = right (contract)."""
     action = int(action)
     if action == STAY_SILENT:
         return GuidanceAction(turn=0.0, speak=False)
@@ -42,8 +32,7 @@ def action_to_guidance(action: int) -> GuidanceAction:
 
 
 class CueGate:
-    """Human-side rate limiting on top of whatever the policy learned.
-    STOP is never suppressed."""
+    
 
     def __init__(self, same_cue_cooldown_s=2.0, any_cue_cooldown_s=0.8, clock=time.monotonic):
         self.same, self.any, self.clock = same_cue_cooldown_s, any_cue_cooldown_s, clock

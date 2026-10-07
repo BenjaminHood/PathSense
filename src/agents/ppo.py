@@ -10,7 +10,7 @@ from .policies import make_policy
 from pprint import pp, pprint
 
 def collect_rollout(env, policy, cfg, obs, device):
-    """Run the policy for the rollout steps and return a batch of transitions"""
+    
     
     T = cfg.rollout_steps
     obs_buf = np.zeros((T, int(np.prod(env.observation_space.shape))), dtype=np.float32)

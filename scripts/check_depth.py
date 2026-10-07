@@ -1,5 +1,5 @@
-"""Step 3. Run the depth model on one photo, report the centre distance, save a
-heatmap + the 16 ranges.  python -m scripts.check_depth wall_2m.jpg --true 2.0"""
+
+# Depth model, centre distance and the heatmap plus the 16 ranges
 import argparse
 import cv2, numpy as np, matplotlib.pyplot as plt
 from src.perception.camera import CameraModel

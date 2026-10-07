@@ -1,9 +1,4 @@
-"""Depth map -> the 16 ranges the simulator's sensor produces.
-
-Sim convention (checked in pathsense_env._build_observation):
-ray i points at heading + linspace(-fov/2, +fov/2)[i]. With the contract's
-+y = left, ray 0 is the RIGHTMOST ray and ray 15 the LEFTMOST.
-"""
+#Depth map
 import numpy as np
 from ..common.types import N_RANGES, MAX_RANGE
 
@@ -11,8 +6,7 @@ INDEX0_IS_RIGHT = True   # flip only if Track A changes the sim
 
 
 def backproject(depth, cam, stride=4):
-    """Pixels + depth -> 3D points in a gravity-aligned frame.
-    Returns (right, forward, height_above_floor), each 1-D, metres."""
+   
     v, u = np.mgrid[0:depth.shape[0]:stride, 0:depth.shape[1]:stride]
     z = depth[::stride, ::stride]
     ok = np.isfinite(z) & (z > 0)
@@ -27,10 +21,7 @@ def backproject(depth, cam, stride=4):
 
 def depth_to_ranges(depth, cam, fov_deg, min_h=0.15, max_h=1.9, pct=5.0, stride=4,
                     ray_width=0.3):
-    """depth: (H, W) metric depth in metres, same size as cam.width x cam.height.
-    fov_deg: MUST equal the simulator's EnvConfig.fov_deg.
-    ray_width: fraction of the gap between rays each ray looks at. The sim casts
-    thin rays, so keep this small (a wide wedge reads too close at the sides)."""
+    
     right, fwd, h = backproject(depth, cam, stride)
     keep = (h > min_h) & (h < max_h) & (fwd > 0.05)       # drop floor, ceiling, behind
     az = np.arctan2(right[keep], fwd[keep])               # + = right

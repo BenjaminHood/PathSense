@@ -1,5 +1,4 @@
-"""Step 6. Same scene in the sim and through the camera pipeline, bars side by side.
-    python -m scripts.compare_sim    -> artifacts/sim_vs_camera.png"""
+# In the simulator and through the camera pipeline
 import numpy as np, matplotlib.pyplot as plt
 from src.common.types import N_RANGES
 from src.envs.config import EnvConfig

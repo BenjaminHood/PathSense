@@ -1,4 +1,5 @@
-"""Camera intrinsics: how pixels map to directions in metres."""
+
+# How mixals map to directions in metres
 from dataclasses import dataclass
 import json
 import numpy as np

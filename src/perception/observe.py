@@ -1,4 +1,4 @@
-"""The Track C contract function."""
+"Track C contract"
 import numpy as np
 from ..common.types import Observation
 from .ranges import depth_to_ranges

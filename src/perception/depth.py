@@ -1,10 +1,9 @@
-"""Monocular metric depth. Swap models here; nothing else changes."""
+
 import numpy as np
 
 
 class DepthAnythingMetric:
-    """Depth Anything V2, metric indoor checkpoint (outputs metres).
-    pip install transformers torch pillow"""
+    # Depth Anything v2
 
     def __init__(self, size="Small", device=None, scale=1.0):
         import torch
@@ -18,7 +17,7 @@ class DepthAnythingMetric:
         self.scale = scale   # fitted from your tape-measure table (Step 3)
 
     def __call__(self, frame_rgb: np.ndarray) -> np.ndarray:
-        """frame_rgb: (H, W, 3) uint8 RGB. Returns (H, W) float32 metres."""
+        # frame_rgb
         torch = self.torch
         inputs = self.proc(images=frame_rgb, return_tensors="pt").to(self.device)
         with torch.no_grad():

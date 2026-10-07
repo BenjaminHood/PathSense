@@ -1,4 +1,6 @@
-"""Goal vector from an ArUco marker stuck at the goal (door, exit sign...)."""
+
+
+# Goal vector is used from an ArUco marker
 import numpy as np
 import cv2
 
@@ -12,7 +14,7 @@ class MarkerGoal:
         self.obj = np.array([[-s, s, 0], [s, s, 0], [s, -s, 0], [-s, -s, 0]], np.float32)
 
     def __call__(self, frame_bgr):
-        """Returns goal_vector (2,) in AGENT frame (+x forward, +y left), or None."""
+        
         corners, ids, _ = self.detector.detectMarkers(frame_bgr)
         if ids is None or self.marker_id not in ids.flatten():
             return None
@@ -25,8 +27,6 @@ class MarkerGoal:
         return np.array([z_fwd, -x_right], np.float32)   # camera -> agent frame
 
 
-# ---------------------------------------------------------------------------
-# Between marker sightings: dead reckoning with visually estimated yaw.
 
 def _rot(yaw):
     c, s = np.cos(yaw), np.sin(yaw)
@@ -34,12 +34,7 @@ def _rot(yaw):
 
 
 class VisualYawEstimator:
-    """Yaw change between consecutive frames from sparse optical flow.
-
-    Turning LEFT shifts the scene RIGHT in the image by ~fx * tan(yaw). The
-    median horizontal flow ignores most of the left/right-symmetric flow
-    from walking forward. Returns radians, + = turned left (contract frame).
-    """
+    
 
     def __init__(self, cam, max_corners=150):
         self.cam, self.max_corners, self.prev = cam, max_corners, None
@@ -61,8 +56,7 @@ class VisualYawEstimator:
 
 
 class GoalTracker:
-    """Marker fix when visible; otherwise carry the goal forward ourselves.
-    Goal is in the agent frame (+x forward, +y left), metres."""
+  
 
     def __init__(self, initial_goal=None, marker=None):
         self.goal = None if initial_goal is None else np.asarray(initial_goal, np.float64)

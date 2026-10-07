@@ -1,9 +1,4 @@
-"""Non-blocking speech. The control loop must never wait on audio.
 
-Only the LATEST pending cue is kept: if the loop issues "left" then
-"stop" while the engine is still talking, "left" is dropped. A stale
-navigation instruction is worse than none.
-"""
 import threading
 
 

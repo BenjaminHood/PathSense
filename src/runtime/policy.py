@@ -1,8 +1,4 @@
-"""Load a trained checkpoint as obs_array -> action_id.
 
-This is the one place Track C touches Track B's package: we need its
-network definition to load the weights. Only make_policy is used.
-"""
 import numpy as np
 from gymnasium import spaces
 
