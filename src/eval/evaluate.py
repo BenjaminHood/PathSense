@@ -39,9 +39,9 @@ if __name__ == "__main__":
     env = PathSenseEnv(EnvConfig())
     policy = load_policy(env)
     results = {
-        "Random":        run_episodes(random_policy(env), env, n_episodes=100),
-        "PPO (greedy)":  run_episodes(greedy(policy), env, n_episodes=100),
-        "PPO (sampled)": run_episodes(sampled(policy), env, n_episodes=100),
+        "Random":        run_episodes(random_policy(env), env, n_episodes=1000),
+        "PPO (greedy)":  run_episodes(greedy(policy), env, n_episodes=1000),
+        "PPO (sampled)": run_episodes(sampled(policy), env, n_episodes=1000),
     }
     for k, v in results.items():
         print(f"{k:16s} {v}")
