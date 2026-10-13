@@ -11,6 +11,8 @@ from src.perception.camera import CameraModel
 from src.perception.goal import GoalTracker, MarkerGoal, VisualYawEstimator
 from src.runtime.loop import LiveLoop, PerceptionWorker, RuntimeConfig
 from src.runtime.policy import load_greedy_policy
+from src.runtime.camera import StaticCamera, ThreadedCamera
+from tests.synthetic import render_depth
 
 
 def parse_args():
@@ -38,11 +40,8 @@ def load_cam(a, width, height):
 
 
 def build(a):
-    from src.runtime.camera import StaticCamera, ThreadedCamera
-
+    
     if a.dry_run:
-        from tests.synthetic import render_depth
-
         cam = CameraModel.from_fov(320, 240, hfov_deg=a.hfov)
         depth = render_depth(cam, cylinders=[(3.0, 0.4, 0.4)])     # pillar 3 m ahead, a bit left
         camera = StaticCamera(np.zeros((240, 320, 3), np.uint8))
