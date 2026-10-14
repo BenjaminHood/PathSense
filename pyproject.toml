@@ -1,3 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pathsense"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "gymnasium>=1.0",
+    "torch>=2.2",
+    "opencv-contrib-python>=4.8",  # contrib for cv2.aruco
+    "transformers>=4.45",          # Depth Anything V2
+    "pillow",
+    "pyyaml",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+tts = ["pyttsx3"]  # optional; cues are printed if missing (Linux also needs espeak-ng)
+test = ["pytest"]
+all = ["pathsense[tts,test]"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
