@@ -118,7 +118,6 @@ def ppo_update(policy, optimizer, batch, advantages, returns, cfg, device):
             clipped     = torch.clamp(ratio, 1 - cfg.clip_eps, 1 + cfg.clip_eps) * mb_adv
             policy_loss = -torch.min(unclipped, clipped).mean()
 
-            # TODO: value loss -- mean squared error between values and returns[mb]
             value_loss = ((values - returns[mb]) ** 2).mean()
             
             entropy_loss = -entropy.mean()
@@ -141,6 +140,7 @@ def ppo_update(policy, optimizer, batch, advantages, returns, cfg, device):
 
     return {k: float(np.mean([s[k] for s in batch_stats])) for k in batch_stats[0]}
 
+# compute the explained variance of the value function
 def explained_variance(values, returns):
     var = np.var(returns)
     
@@ -151,6 +151,7 @@ def explained_variance(values, returns):
         
     return variance
 
+# train the PPO agent
 def train(cfg: PPOConfig, env=None, live=True, block=True):
     """Train the PPO"""
 
@@ -165,18 +166,25 @@ def train(cfg: PPOConfig, env=None, live=True, block=True):
     # ckpt = torch.load("artifacts/policy.pt")
     # policy.load_state_dict(ckpt["policy"])
     
+    # adam optimizer 
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.lr, eps=1e-5)
     
     steps = 0
     recent = []
     env_name = cfg.env_id if env is None else type(env).__name__
-    plot = LiveTrainingPlot(f"PathSense — PPO ({cfg.env_id})") if live else None
+
+    if live:
+        # plots the live training metrics
+        plot = LiveTrainingPlot(f"PathSense — PPO ({env_name})")
+    else:
+        plot = None
     
     while steps < cfg.total_steps:
         batch, obs, ep_returns = collect_rollout(env, policy, cfg, obs, device)
-        steps += cfg.rollout_steps 
+        steps += cfg.rollout_steps
         recent.extend(ep_returns)
-        
+
+        # compute the advantages and returns for the rollout
         advantages, returns = compute_gae(
             batch["rewards"], batch["values"], batch["dones"],
             batch["last_value"], cfg.gamma, cfg.gae_lambda
@@ -192,7 +200,8 @@ def train(cfg: PPOConfig, env=None, live=True, block=True):
             mean_ret = np.mean(recent[-20:])
         else:
             mean_ret = float("nan")
-            
+
+        # plots if live training is True
         if plot:
             plot.update({
                 "steps": steps,
@@ -213,7 +222,7 @@ def train(cfg: PPOConfig, env=None, live=True, block=True):
     
     history = plot.close(block=block) if plot else []
     os.makedirs("artifacts", exist_ok=True)
-    torch.save({"policy": policy.state_dict(), "cfg": cfg}, cfg.save_path)
+    torch.save({"policy": policy.state_dict(), "cfg": cfg}, cfg.save_path) #save the policy
     with open(cfg.save_path.replace(".pt", "_history.json"), "w") as f:
         json.dump(history, f)
     
