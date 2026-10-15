@@ -43,6 +43,8 @@ import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import android.speech.tts.TextToSpeech
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
   companion object {
@@ -58,6 +60,11 @@ class MainActivity : ComponentActivity() {
     // Required Android permissions for the DAT SDK to function properly
     val PERMISSIONS: Array<String> = arrayOf(BLUETOOTH, BLUETOOTH_CONNECT, INTERNET)
   }
+
+  // Text to speech engine for reading out the cues
+  private lateinit var tts: TextToSpeech
+  // RelayClient for sending frames to the server
+  private lateinit var relay: RelayClient
 
   val viewModel: WearablesViewModel by viewModels()
 
@@ -119,6 +126,24 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+
+    tts = TextToSpeech(this) {status ->
+      if (status == TextToSpeech.SUCCESS) {
+        tts.language = Locale.US
+        Log.i(TAG, "TextToSpeech initialized successfully")
+      } else {
+        Log.e(TAG, "TextToSpeech initialization failed with status: $status")
+      }
+    }
+
+    relay = RelayClient("ws://192.168.1.118:8765") { phrase ->
+      runOnUiThread {
+        tts.speak(phrase, TextToSpeech.QUEUE_FLUSH, null, null)
+      }
+    }
+    relay.connect()
+    Relay.client = relay
+
     maybeStartMockDeviceTestServer()
     enableEdgeToEdge()
     setContent {
@@ -135,6 +160,12 @@ class MainActivity : ComponentActivity() {
     // First, ensure the app has necessary Android permissions
     permissionCheckLauncher.launch(PERMISSIONS)
   }
+
+  override fun onDestroy() {
+      relay.close()
+      tts.shutdown()
+      super.onDestroy()
+    }
 
   // Debug-only: when launched with `--ez mwdat_ui_testing true`, enable MockDeviceKit and start its
   // local HTTP test server so an out-of-process MCP client can drive the app without real glasses.

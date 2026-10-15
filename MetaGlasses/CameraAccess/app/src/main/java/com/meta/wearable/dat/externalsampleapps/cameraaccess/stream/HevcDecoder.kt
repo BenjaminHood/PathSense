@@ -25,6 +25,7 @@ import android.util.Log
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
+import com.meta.wearable.dat.externalsampleapps.cameraaccess.Relay
 
 class HevcDecoder {
 
@@ -91,6 +92,8 @@ class HevcDecoder {
 
   fun decodeFrame(data: ByteArray, presentationTimeUs: Long) {
     if (data.isEmpty()) return
+
+    Relay.client?.sendPacket(data)
 
     // Replicate SDK VideoDecoder.enqueue(buffer, presentationTimeUs) exactly:
     // parse NAL units, cache config, activate on keyframe, feed each NAL separately.
