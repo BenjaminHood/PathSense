@@ -11,6 +11,7 @@ from .policies import make_policy
 from pprint import pp, pprint
 from src.eval.train_plot import LiveTrainingPlot
 
+# collect a set of experiences from the env
 def collect_rollout(env, policy, cfg, obs, device):
     
     
@@ -21,10 +22,12 @@ def collect_rollout(env, policy, cfg, obs, device):
     rew_buf = np.zeros(T, dtype=np.float32)
     val_buf = np.zeros(T, dtype=np.float32)
     done_buf = np.zeros(T, dtype=np.float32)
-    
+
+    # logs the epi returns for each rollout
     episode_returns = []
     running = 0.0
-    
+
+    # collect experiences
     for t in range(T):
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad():
@@ -68,6 +71,7 @@ def collect_rollout(env, policy, cfg, obs, device):
     
     return batch, obs, episode_returns
 
+# function to compute the generalized advantage estimation
 def compute_gae(rewards, values, dones, last_value, gamma, gae_lambda):
     """Generalized Advantage Estimation"""
     
@@ -85,7 +89,7 @@ def compute_gae(rewards, values, dones, last_value, gamma, gae_lambda):
     returns = advantages + values
     return advantages, returns.astype(np.float32)
     
-
+# update the policy on each rollout experiences
 def ppo_update(policy, optimizer, batch, advantages, returns, cfg, device):
     obs = torch.as_tensor(batch["obs"], device=device)
     actions = torch.as_tensor(batch["actions"], device=device)
