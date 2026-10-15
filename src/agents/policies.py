@@ -18,9 +18,9 @@ def mlp(in_dim: int, hidden_sizes, out_dim: int) -> nn.Sequential:
     
     return nn.Sequential(*layers)
 
-
+# the actor-critic multilayer perceptron policy network
+# actor critic parent class
 class ActorCritic(nn.Module):
-    
     
     is_discrete: bool
     action_shape: tuple
@@ -35,7 +35,8 @@ class ActorCritic(nn.Module):
     def to_env_action(self, action: torch.Tensor):
         
         raise NotImplementedError
-    
+
+# this class is used to create policies for the discrete actions   
 class CategoricalPolicy(ActorCritic):
     """Discrete Actions"""
     
@@ -47,21 +48,25 @@ class CategoricalPolicy(ActorCritic):
         self.value_net = mlp(obs_dim, hidden_sizes, 1)
         self.action_shape = ()
         self.action_dtype = np.int64
-        
+
+    # categorical distribution 
     def _dist(self, obs):
         return Categorical(logits=self.policy_net(obs)) #retuen categorical probs
     
+    # actor method
     def act(self, obs):
         dist = self._dist(obs)
         action = dist.sample()
         
         return action, dist.log_prob(action), self.value_net(obs).squeeze(-1)
     
+    # critic method
     def evaluate(self, obs, actions):
         dist = self._dist(obs)
         
         return dist.log_prob(actions), dist.entropy(), self.value_net(obs).squeeze(-1)
-    
+
+    # return the action as an int to the env
     def to_env_action(self, action):
         return int(action.item())
     
