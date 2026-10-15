@@ -6,6 +6,7 @@ import torch.nn as nn
 
 from torch.distributions import Categorical, Normal
 
+# function to create a mlp
 def mlp(in_dim: int, hidden_sizes, out_dim: int) -> nn.Sequential:
     layers = []
     last = in_dim

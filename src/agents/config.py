@@ -14,7 +14,7 @@ class PPOConfig:
     hidden_sizes: tuple = (64, 64) #number of neurons in the hidden layers
     
     # rollout
-    total_steps: int = 150_000
+    total_steps: int = 150_000 #training time steps
     rollout_steps: int = 2048 #steps collected per policy update
     epochs: int = 10 #passes over each rollout
     minibatch_size: int = 64
@@ -33,10 +33,12 @@ class PPOConfig:
     seed: int = 0
     log_every: int = 1
     save_path: str = "artifacts/policy.pt"
-    
+
+    # convert hidden sizes into a tuple
     def __post_init__(self):
         self.hidden_sizes = tuple(self.hidden_sizes)
-        
+
+    # load config from yaml file if needed
     @classmethod
     def from_yaml(cls, path: str | Path) -> "PPOConfig":
         raw = yaml.safe_load(Path(path).read_text()) or {}
