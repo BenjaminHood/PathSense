@@ -70,7 +70,8 @@ class CategoricalPolicy(ActorCritic):
     # return the action as an int to the env
     def to_env_action(self, action):
         return int(action.item())
-    
+
+# class to create policies for continous actions  
 class GaussianPolicy(ActorCritic):
     """Continous actions"""
     
@@ -93,7 +94,8 @@ class GaussianPolicy(ActorCritic):
         
         # sum over action dims
         return action, dist.log_prob(action).sum(-1), self.value_net(obs).squeeze(-1)
-    
+
+    # eval the policy and value networks
     def evaluate(self, obs, actions):
         dist = self._dist(obs)
         
@@ -105,7 +107,8 @@ class GaussianPolicy(ActorCritic):
     
     def to_env_action(self, action):
         return action.squeeze(0).cpu().numpy()
-    
+
+# create a policy based on the config  
 def make_policy(obs_space, action_space, cfg) -> ActorCritic:
     obs_dim = int(np.prod(obs_space.shape))
     
