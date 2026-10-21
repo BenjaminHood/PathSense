@@ -10,7 +10,7 @@ from src.guidance.tts import make_speaker
 from src.perception.camera import CameraModel
 from src.perception.goal import GoalTracker, MarkerGoal, VisualYawEstimator
 from src.runtime.loop import LiveLoop, PerceptionWorker, RuntimeConfig
-from src.runtime.policy import load_greedy_policy
+from src.runtime.policy import check_fan_coverage, load_policy
 from src.runtime.camera import StaticCamera, ThreadedCamera
 from tests.synthetic import render_depth
 
@@ -19,12 +19,17 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", default="configs/camera.json", help="calibration (Step 2)")
     ap.add_argument("--hfov", type=float, default=70.0, help="used if --camera file is missing")
+    ap.add_argument("--frame-fit", choices=["crop", "scale"], default="crop",
+                    help="how frames of another size relate to the calibration: the glasses "
+                         "crop (focal length in px unchanged); 'scale' for resized video")
     ap.add_argument("--device", default="0", help="webcam index, video file or stream URL")
     ap.add_argument("--checkpoint", default="artifacts/policy.pt")
     ap.add_argument("--goal", default=None, help="initial goal 'x,y' metres (fwd, left)")
     ap.add_argument("--marker-id", type=int, default=None)
     ap.add_argument("--marker-size", type=float, default=0.15)
     ap.add_argument("--speed", type=float, default=1.2, help="walking speed, m/s")
+    ap.add_argument("--greedy", action="store_true",
+                    help="always take the most likely action instead of sampling")
     ap.add_argument("--no-speech", action="store_true")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--max-seconds", type=float, default=None)
@@ -34,7 +39,7 @@ def parse_args():
 
 def load_cam(a, width, height):
     if os.path.exists(a.camera):
-        return CameraModel.load(a.camera).resized(width, height)
+        return CameraModel.load(a.camera).fitted(width, height, a.frame_fit)
     print(f"{a.camera} not found; using an uncalibrated {a.hfov:.0f} deg model")
     return CameraModel.from_fov(width, height, hfov_deg=a.hfov)
 
@@ -66,9 +71,11 @@ def build(a):
     if goal0 is None and marker is None:
         raise SystemExit("need --goal and/or --marker-id")
 
-    cfg = RuntimeConfig(walking_speed=a.speed)
+    policy = load_policy(a.checkpoint, sample=not a.greedy)
+    check_fan_coverage(cam, policy.fov_deg)
+    cfg = RuntimeConfig(walking_speed=a.speed, fov_deg=policy.fov_deg)
     worker = PerceptionWorker(camera, depth_model, cam, cfg.fov_deg)
-    loop = LiveLoop(camera, load_greedy_policy(a.checkpoint), make_speaker(not a.no_speech),
+    loop = LiveLoop(camera, policy, make_speaker(not a.no_speech),
                     worker, GoalTracker(goal0, marker),
                     yaw_estimator=None if a.dry_run else VisualYawEstimator(cam), cfg=cfg)
     return loop, worker, camera

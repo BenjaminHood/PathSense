@@ -34,19 +34,27 @@ def action_to_guidance(action: int) -> GuidanceAction:
 class CueGate:
     
 
-    def __init__(self, same_cue_cooldown_s=2.0, any_cue_cooldown_s=0.8, clock=time.monotonic):
+    def __init__(self, same_cue_cooldown_s=2.0, any_cue_cooldown_s=0.8, stop_repeat_s=1.5,
+                 clock=time.monotonic):
         self.same, self.any, self.clock = same_cue_cooldown_s, any_cue_cooldown_s, clock
-        self.last_time, self.last_any = {}, -np.inf
+        self.stop_repeat = stop_repeat_s
+        self.last_time, self.last_any, self.last_cue = {}, -np.inf, None
 
     def allow(self, action: int) -> bool:
         if action == STAY_SILENT:
             return False
         now = self.clock()
-        if action != CUE_STOP:
+        if action == CUE_STOP:
+            # Never held back by other cues, but don't repeat "stop" every tick
+            # while the walker is already stopped.
+            if self.last_cue == CUE_STOP and now - self.last_time[CUE_STOP] < self.stop_repeat:
+                return False
+        else:
             if now - self.last_any < self.any:
                 return False
             if now - self.last_time.get(action, -np.inf) < self.same:
                 return False
         self.last_time[action] = now
         self.last_any = now
+        self.last_cue = action
         return True

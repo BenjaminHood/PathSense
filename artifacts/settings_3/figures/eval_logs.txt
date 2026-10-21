@@ -1,0 +1,4 @@
+wrote artifacts/figures\episode_sampled_s3.gif (97 frames, goal reached)
+wrote artifacts/figures\episode_sampled_s7.gif (150 frames, collision)
+wrote artifacts/figures\episode_sampled_s11.gif (66 frames, collision)
+wrote artifacts/figures\episode_greedy_s3.gif (501 frames, timed out)

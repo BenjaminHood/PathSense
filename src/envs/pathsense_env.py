@@ -79,13 +79,20 @@ class PathSenseEnv(gym.Env):
         self.compliance_prob = float(self._rng.uniform(*cfg.compliance_range))
         self.heading_noise_std = float(self._rng.uniform(*cfg.heading_noise_std_range))
  
-        self.intent = "straight"     # walker's current behaviour
+        self.dt = float(self._rng.uniform(*cfg.dt_range)) if cfg.dt_range else cfg.dt
+
+        # walker's current behaviour; some episodes start stopped so "speed 0"
+        # isn't an unseen state the policy can get stuck in
+        stopped = self._rng.uniform() < cfg.start_stopped_prob
+        self.intent = "stopped" if stopped else "straight"
         self.pending_cue = None      # {"type": int, "remaining": int} or None
         self.last_cue_step = {}      # action_id -> step it was last issued
         self.step_count = 0
         self.prev_dist_to_goal = self._dist_to_goal()
- 
-        obs = self._build_observation()
+        self.prev_clearance = self._min_obstacle_clearance()
+        self._last_ranges = None
+
+        obs = self._build_observation(lag=True)
         info = {
             "pose": Pose(float(self.pos[0]), float(self.pos[1]), float(self.heading)),
             "collision": False,
@@ -149,9 +156,11 @@ class PathSenseEnv(gym.Env):
         # 3. Walker dynamics: heading noise every step, move if not stopped.
         self.heading += self._rng.normal(0.0, self.heading_noise_std)
         if self.intent != "stopped":
-            self.pos = self.pos + cfg.walker_speed * cfg.dt * np.array(
+            self.pos = self.pos + cfg.walker_speed * self.dt * np.array(
                 [np.cos(self.heading), np.sin(self.heading)]
             )
+        else:
+            reward += cfg.reward_stopped
         self.pos = np.clip(self.pos, 0.0, cfg.arena_size)
  
         # 4. Progress reward.
@@ -166,22 +175,24 @@ class PathSenseEnv(gym.Env):
         if collision:
             reward += cfg.reward_collision
             terminated = True
-        elif clearance <= cfg.near_miss_margin:
-            reward += cfg.reward_near_miss
+        elif clearance <= cfg.near_miss_margin and clearance < self.prev_clearance:
+            reward += cfg.reward_near_miss      # closing in; standing near something is fine
+        self.prev_clearance = clearance
  
         if not terminated and dist <= cfg.goal_radius:
             reward += cfg.reward_goal
             terminated = True
 
         truncated = self.step_count >= cfg.max_steps
- 
-        obs = self._build_observation()
+
+        obs = self._build_observation(lag=True)
         info = {
             "pose": Pose(float(self.pos[0]), float(self.pos[1]), float(self.heading)),
             "collision": collision,
             "dist_to_goal": dist,
             "compliance_prob": self.compliance_prob,
             "reaction_delay": self.reaction_delay,
+            "dt": self.dt,
         }
 
         return obs.to_array(), reward, terminated, truncated, info
@@ -207,7 +218,7 @@ class PathSenseEnv(gym.Env):
             return np.inf
         return min(np.linalg.norm(self.pos - o[:2]) - o[2] for o in self.obstacles)
  
-    def _build_observation(self) -> Observation:
+    def _build_observation(self, lag=False) -> Observation:
         cfg = self.cfg
         half_fov = np.deg2rad(cfg.fov_deg) / 2.0
         offsets = np.linspace(-half_fov, half_fov, N_RANGES)
@@ -225,7 +236,15 @@ class PathSenseEnv(gym.Env):
                 if hit is not None and hit < best:
                     best = hit
             ranges[i] = min(best, MAX_RANGE)
- 
+
+        if lag:
+            # Live depth is slower than the control loop, so sometimes the
+            # policy acts on the previous fan.
+            if self._last_ranges is not None and self._rng.uniform() < cfg.stale_ranges_prob:
+                ranges, self._last_ranges = self._last_ranges, ranges
+            else:
+                self._last_ranges = ranges
+
         rot = np.array([[np.cos(-self.heading), -np.sin(-self.heading)],
                          [np.sin(-self.heading), np.cos(-self.heading)]])
         goal_vector = rot @ (self.goal - self.pos)

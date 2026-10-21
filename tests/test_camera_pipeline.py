@@ -100,6 +100,20 @@ def test_cue_gate_rate_limits_but_never_blocks_stop():
     assert gate.allow(cues.CUE_RIGHT)
 
 
+def test_cue_gate_throttles_repeated_stop_only():
+    clk = FakeClock()
+    gate = CueGate(stop_repeat_s=1.5, clock=clk)
+    assert gate.allow(cues.CUE_STOP)
+    clk.t += 0.1
+    assert not gate.allow(cues.CUE_STOP)           # already stopped: don't nag
+    clk.t += 1.5
+    assert gate.allow(cues.CUE_STOP)               # still blocked → repeat after the window
+    clk.t += 1.0
+    assert gate.allow(cues.CUE_STRAIGHT)
+    clk.t += 0.1
+    assert gate.allow(cues.CUE_STOP)               # stop after a different cue fires at once
+
+
 # ---------------------------------------------------------------- goal tracking
 
 def test_dead_reckoning_walk_and_turn():
@@ -140,8 +154,31 @@ def make_loop(policy_action=cues.CUE_RIGHT, goal=(5.0, 0.0), cylinders=()):
 
     spk = ListSpeaker()
     loop = LiveLoop(camera, policy, spk, worker, GoalTracker(initial_goal=goal),
-                    cfg=RuntimeConfig(), clock=clk)
+                    cfg=RuntimeConfig(fov_deg=FOV), clock=clk)
     return loop, worker, camera, clk, spk, seen
+
+
+def test_stop_filter_ignores_stop_in_open_space():
+    loop, worker, *_, spk, _ = make_loop(policy_action=cues.CUE_STOP)
+    worker.run_once()
+    rec = loop.step()
+    assert rec["stop_filtered"] and rec["action"] == cues.STAY_SILENT and spk.said == []
+
+
+def test_stop_filter_keeps_stop_with_obstacle_ahead():
+    loop, worker, *_, spk, _ = make_loop(policy_action=cues.CUE_STOP, cylinders=[(1.3, 0.0, 0.3)])
+    worker.run_once()
+    rec = loop.step()
+    assert "stop_filtered" not in rec and rec["action"] == cues.CUE_STOP and spk.said == ["stop"]
+
+
+def test_far_goal_is_fed_in_at_max_goal_distance():
+    from src.common.types import MAX_GOAL, Observation
+    far = Observation(np.full(N_RANGES, MAX_RANGE, np.float32), np.array([60.0, 80.0], np.float32), 1.2)
+    g = far.to_array()[N_RANGES:N_RANGES + 2] * MAX_RANGE
+    np.testing.assert_allclose(g, [0.6 * MAX_GOAL, 0.8 * MAX_GOAL], rtol=1e-5)   # same direction
+    near = Observation(far.ranges, np.array([3.0, -4.0], np.float32), 1.2)
+    np.testing.assert_allclose(near.to_array()[N_RANGES:N_RANGES + 2] * MAX_RANGE, [3.0, -4.0], rtol=1e-6)
 
 
 def test_loop_normal_tick_speaks_policy_cue():

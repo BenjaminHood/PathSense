@@ -30,6 +30,21 @@ class CameraModel:
         return CameraModel(self.fx * sx, self.fy * sy, self.cx * sx, self.cy * sy,
                            width, height, self.height_m, self.pitch_rad)
 
+    def cropped(self, width: int, height: int) -> "CameraModel":
+        """Same lens, centre-cropped to a new frame size: the focal length in
+        pixels stays put, so the FOV shrinks with the frame. The glasses'
+        stream changes size this way (1472/1408/1392 px wide clips all
+        measure f ~ 1230 px), not by rescaling."""
+        dx, dy = (self.width - width) / 2, (self.height - height) / 2
+        return CameraModel(self.fx, self.fy, self.cx - dx, self.cy - dy,
+                           width, height, self.height_m, self.pitch_rad)
+
+    def fitted(self, width: int, height: int, mode: str = "crop") -> "CameraModel":
+        """Adapt a calibration to a frame of another size ("crop" or "scale")."""
+        if (width, height) == (self.width, self.height):
+            return self
+        return self.cropped(width, height) if mode == "crop" else self.resized(width, height)
+
     @classmethod
     def from_fov(cls, width, height, hfov_deg, **kw) -> "CameraModel":
         """Rough model when you haven't calibrated yet (square pixels, centred)."""

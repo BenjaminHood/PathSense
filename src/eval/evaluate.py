@@ -10,7 +10,7 @@ from src.envs.pathsense_env import PathSenseEnv
 from src.eval.baselines import run_episodes, random_policy
 
 
-def load_policy(env, path="artifacts/policy.pt"):
+def load_policy(env, path="artifacts/nav_policy.pt"):
     ckpt = torch.load(path, weights_only=False)
     cfg = ckpt["cfg"]
     policy = make_policy(env.observation_space, env.action_space, cfg)

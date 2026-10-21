@@ -14,7 +14,7 @@ class PPOConfig:
     hidden_sizes: tuple = (64, 64) #number of neurons in the hidden layers
     
     # rollout
-    total_steps: int = 150_000 #training time steps
+    total_steps: int = 2000000 #training time steps
     rollout_steps: int = 2048 #steps collected per policy update
     epochs: int = 10 #passes over each rollout
     minibatch_size: int = 64
@@ -27,10 +27,11 @@ class PPOConfig:
     # PPO objectives
     clip_eps: float = 0.2 #PPO clipping range
     value_coef: float = 0.5
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.003
     max_grad_norm: float = 0.5
     
     seed: int = 0
+    device: str = "cpu" # "cuda" or "cpu"; cuda falls back to CPU if unavailable
     log_every: int = 1
     save_path: str = "artifacts/policy.pt"
 

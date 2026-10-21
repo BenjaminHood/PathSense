@@ -19,8 +19,14 @@ class RuntimeConfig:
     goal_radius: float = 0.8               # = EnvConfig.goal_radius
     max_frame_age_s: float = 0.3
     max_ranges_age_s: float = 0.5
-    fov_deg: float = 120.0                 # = EnvConfig.fov_deg (the policy's fan)
+    fov_deg: float = 100.0                 # the policy's fan; set from the checkpoint
     stop_range_m: float = 0.5              # safety override: anything closer → STOP
+    # Stop filter: a "stop" from the policy only counts if something is within
+    # stop_filter_m inside the walking path (rays within ±stop_filter_deg of
+    # straight ahead, ~0.4 m either side at 1.5 m). Otherwise it's treated as
+    # silence. None disables the filter.
+    stop_filter_m: float | None = 1.5
+    stop_filter_deg: float = 15.0
 
 
 class CueSpeedModel:
@@ -158,6 +164,12 @@ class LiveLoop:
         assert obs.ranges.shape == (N_RANGES,)
         action = int(self.policy_fn(obs.to_array()))
         rec["policy_action"] = action
+        if action == CUE_STOP and cfg.stop_filter_m is not None:
+            ray_deg = np.linspace(-cfg.fov_deg / 2, cfg.fov_deg / 2, N_RANGES)
+            ahead = obs.ranges[np.abs(ray_deg) <= cfg.stop_filter_deg]
+            if ahead.size and ahead.min() >= cfg.stop_filter_m:
+                action = STAY_SILENT       # nothing close in the walking path
+                rec["stop_filtered"] = True
         if obs.ranges.min() < cfg.stop_range_m:
             action = CUE_STOP              # safety override, whatever the policy says
         guidance = action_to_guidance(action)

@@ -155,7 +155,10 @@ def explained_variance(values, returns):
 def train(cfg: PPOConfig, env=None, live=True, block=True):
     """Train the PPO"""
 
-    device = torch.device("cpu")
+    use_cuda = cfg.device == "cuda" and torch.cuda.is_available()
+    if cfg.device == "cuda" and not use_cuda:
+        print("CUDA not available; training on CPU")
+    device = torch.device("cuda" if use_cuda else "cpu")
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     
@@ -222,7 +225,11 @@ def train(cfg: PPOConfig, env=None, live=True, block=True):
     
     history = plot.close(block=block) if plot else []
     os.makedirs("artifacts", exist_ok=True)
-    torch.save({"policy": policy.state_dict(), "cfg": cfg}, cfg.save_path) #save the policy
+    # save the policy, plus the env config so the runtime can match its fan (fov_deg)
+    # CPU tensors, so the checkpoint loads on machines without a GPU
+    state = {k: v.cpu() for k, v in policy.state_dict().items()}
+    torch.save({"policy": state, "cfg": cfg,
+                "env_cfg": getattr(env.unwrapped, "cfg", None)}, cfg.save_path)
     with open(cfg.save_path.replace(".pt", "_history.json"), "w") as f:
         json.dump(history, f)
     

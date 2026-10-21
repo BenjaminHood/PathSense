@@ -3,6 +3,9 @@ import numpy as np
 
 N_RANGES = 16          # rays in the depth fan
 MAX_RANGE = 8.0        # metres; readings clipped to this
+MAX_GOAL = 20.0        # metres; farther goals are fed in at this distance (same direction).
+                       #   The sim arena only has goals ~8-27 m away; a 70 m goal pushed
+                       #   the input far outside anything the policy trained on.
 
 
 @dataclass(frozen=True)
@@ -17,9 +20,13 @@ class Observation:
 
     def to_array(self) -> np.ndarray:
        
+        goal = np.asarray(self.goal_vector, np.float64)
+        dist = np.linalg.norm(goal)
+        if dist > MAX_GOAL:
+            goal = goal * (MAX_GOAL / dist)
         return np.concatenate([
             self.ranges / MAX_RANGE,
-            self.goal_vector / MAX_RANGE,
+            goal / MAX_RANGE,
             [self.speed],
         ]).astype(np.float32)
 

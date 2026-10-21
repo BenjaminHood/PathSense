@@ -222,3 +222,6 @@ __marimo__/
 
 # metaglasses
 .MetaGlasses/CameraAccess
+
+recordings/
+*.mp4

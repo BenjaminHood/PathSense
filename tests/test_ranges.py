@@ -8,9 +8,11 @@ from src.envs.config import EnvConfig
 from src.envs.pathsense_env import PathSenseEnv
 from tests.synthetic import render_depth
 
-FOV = 120.0
-# a very wide fake camera so every sim ray is visible in these tests
-WIDE = CameraModel.from_fov(640, 480, hfov_deg=125, height_m=1.6)
+FOV = EnvConfig().fov_deg
+# a very wide fake camera so every sim ray is visible in these tests. Enough pixels
+# that even a narrow fan's thin per-ray windows hit sampled columns (the real
+# depth map is full frame resolution).
+WIDE = CameraModel.from_fov(1280, 960, hfov_deg=125, height_m=1.6)
 
 
 def test_empty_room_is_clear():
@@ -35,7 +37,8 @@ def test_pitched_camera_still_works():
 
 def test_obstacle_on_left_lands_in_high_indices():
     """Contract: +y = left. Sim puts left obstacles in rays 12-15."""
-    r = depth_to_ranges(render_depth(WIDE, cylinders=[(2.0, 2.0, 0.5)]), WIDE, FOV)
+    # ~18 deg left: inside even a 60 deg fan
+    r = depth_to_ranges(render_depth(WIDE, cylinders=[(3.0, 1.0, 0.5)]), WIDE, FOV)
     blocked = np.flatnonzero(r < MAX_RANGE)
     assert blocked.size and blocked.min() >= N_RANGES // 2
 
@@ -58,3 +61,13 @@ def test_narrow_camera_never_reports_unseen_as_clear():
     cam = CameraModel.from_fov(640, 480, hfov_deg=70, height_m=1.6)
     r = depth_to_ranges(render_depth(cam, wall_dist=2.0), cam, FOV)
     assert r.max() < MAX_RANGE
+
+
+def test_crop_keeps_focal_length_and_narrows_fov():
+    cam = CameraModel(1230.0, 1230.0, 736.0, 984.0, 1472, 1968)
+    c = cam.fitted(1408, 1872, "crop")
+    assert (c.fx, c.cx, c.cy) == (1230.0, 704.0, 936.0)
+    assert c.hfov_rad < cam.hfov_rad
+    s = cam.fitted(736, 984, "scale")
+    np.testing.assert_allclose(s.hfov_rad, cam.hfov_rad)
+    assert cam.fitted(1472, 1968) is cam
