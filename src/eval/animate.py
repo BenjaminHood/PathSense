@@ -8,12 +8,27 @@ import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 
+from src.common.path import wrap
 from src.common.types import N_RANGES, MAX_RANGE
+from src.guidance.cues import PHRASES
 from src.eval.plots import (_style, _save, FIGDIR,
                             C_BLUE, C_ORANGE, C_AQUA,
                             GRID, AXIS, MUTED, INK, INK_2)
 
-ACTIONS = ["stay silent", "cue left", "cue right", "cue stop", "cue straight"]
+# What the walker hears. The action names are mirrored relative to the phrases
+# (SIM_CUES_MIRRORED), so label by phrase: "bear right" really turns them right.
+ACTIONS = ["stay silent"] + [f'"{PHRASES[a]}"' for a in range(1, 5)]
+
+
+def _frame(env, obs, action):
+    return {
+        "pos": env.pos.copy(),
+        "heading": float(env.heading),
+        "path_heading": float(env.path_heading),
+        "ranges": np.asarray(obs[:N_RANGES], dtype=float) * MAX_RANGE,
+        "action": int(action),
+        "offset": float(np.degrees(wrap(env.heading - env.path_heading))),
+    }
 
 
 def rollout(env, policy_fn, seed=0):
@@ -23,28 +38,11 @@ def rollout(env, policy_fn, seed=0):
 
     while True:
         action = policy_fn(obs)
-        frames.append({
-            "pos": env.pos.copy(),
-            "heading": float(env.heading),
-            "ranges": np.asarray(obs[:N_RANGES], dtype=float) * MAX_RANGE,
-            "action": int(action),
-            "dist": float(np.linalg.norm(env.goal - env.pos)),
-        })
+        frames.append(_frame(env, obs, action))
         obs, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
-            frames.append({
-                "pos": env.pos.copy(),
-                "heading": float(env.heading),
-                "ranges": np.asarray(obs[:N_RANGES], dtype=float) * MAX_RANGE,
-                "action": 0,
-                "dist": float(info["dist_to_goal"]),
-            })
-            if terminated and not info["collision"]:
-                outcome = "goal reached"
-            elif info["collision"]:
-                outcome = "collision"
-            else:
-                outcome = "timed out"
+            frames.append(_frame(env, obs, 0))
+            outcome = "collision" if info["collision"] else "completed, no collision"
             break
 
     return frames, outcome
@@ -63,14 +61,12 @@ def animate_episode(env, policy_fn, seed=0, name="episode.gif",
     for o in env.obstacles:
         ax.add_patch(plt.Circle(o[:2], o[2], facecolor=GRID,
                                 edgecolor=AXIS, lw=0.8, zorder=1))
-    ax.add_patch(plt.Circle(env.goal, env.cfg.goal_radius, facecolor="none",
-                            edgecolor=C_AQUA, lw=1.2, ls=":", zorder=2))
-    ax.scatter(*env.goal, s=240, marker="*", color=C_AQUA, zorder=6)
 
     rays = LineCollection([], colors=C_BLUE, linewidths=0.8,
                           alpha=0.40, zorder=3)
     ax.add_collection(rays)
     trail, = ax.plot([], [], color=C_BLUE, lw=1.6, zorder=4)
+    intended, = ax.plot([], [], color=C_AQUA, lw=2.2, zorder=6)    # walker's own path
     cue_dots = ax.scatter(np.empty(0), np.empty(0), s=16,
                           color=C_ORANGE, zorder=5)
     walker = ax.scatter(np.empty(0), np.empty(0), s=80,
@@ -85,8 +81,7 @@ def animate_episode(env, policy_fn, seed=0, name="episode.gif",
         Line2D([], [], color=C_BLUE, lw=1.6, label="walked path"),
         Line2D([], [], color=C_BLUE, lw=0.8, alpha=0.4, label="range readings"),
         Line2D([], [], color=C_ORANGE, marker=".", ls="none", label="cue issued"),
-        Line2D([], [], color=C_AQUA, marker="*", ls="none",
-               markersize=11, label="goal"),
+        Line2D([], [], color=C_AQUA, lw=2.2, label="intended direction"),
     ], loc="upper right", fontsize=8)
 
     ax.set_xlim(0, size)
@@ -107,15 +102,19 @@ def animate_episode(env, policy_fn, seed=0, name="episode.gif",
         path = np.array([fr["pos"] for fr in frames[:k + 1]])
         trail.set_data(path[:, 0], path[:, 1])
         walker.set_offsets(p.reshape(1, 2))
+        tip = p + 1.8 * np.array([np.cos(f["path_heading"]), np.sin(f["path_heading"])])
+        intended.set_data([p[0], tip[0]], [p[1], tip[1]])
 
         cues = [fr["pos"] for fr in frames[:k + 1] if fr["action"] != 0]
         cue_dots.set_offsets(np.array(cues) if cues else np.empty((0, 2)))
 
         headline.set_text(ACTIONS[f["action"]])
         tail = f"  ·  {outcome}" if k == len(frames) - 1 else ""
-        sub.set_text(f"{label}   step {k}  ·  {f['dist']:.1f} m to goal"
-                     f"  ·  {sum(1 for c in cues)} cues{tail}")
-        return rays, trail, walker, cue_dots, headline, sub
+        off = "on path" if abs(f["offset"]) < 5 else (
+            f"{abs(f['offset']):.0f}° {'left' if f['offset'] > 0 else 'right'} of path")
+        sub.set_text(f"{label}   step {k}  ·  {off}"
+                     f"  ·  {len(cues)} cues{tail}")
+        return rays, trail, walker, intended, cue_dots, headline, sub
 
     anim = animation.FuncAnimation(fig, update, frames=len(frames),
                                    interval=1000 / fps, blit=False)
