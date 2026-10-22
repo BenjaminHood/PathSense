@@ -1,16 +1,14 @@
 """Live PathSense server.
 
 Receives HEVC packets from the phone over WebSocket, decodes them, drives the
-same PerceptionWorker + LiveLoop as replay.py, and sends cue phrases back.
+same PerceptionWorker with LiveLoop and sends cue phrases back.
 
-  python -m src.runtime.relay --goal 10,0
-
-Threads: 
-the asyncio loop receives and decodes packets 
-PerceptionWorker runs depth in its own thread - the control thread steps
-LiveLoop at a fixed control_hz. Keeping depth out of the control thread
-keeps the goal tracker honest: it dead-reckons with dt = 1 / control_hz, so the
-ticks must really come at that rate however slow depth is.
+Threads:
+the asyncio loop receives and decodes packets
+PerceptionWorker runs depth in its own thread the control thread steps
+LiveLoop at a fixed control_hz. Keeping depth out of the control thread keeps
+the path tracker honest: its settle/give-up timers count dt = 1 / control_hz
+per tick, so the ticks must really come at that rate however slow depth is.
 """
 import argparse
 import asyncio
@@ -25,10 +23,11 @@ import av
 import numpy as np
 import websockets
 
+from ..common.path import PathTracker
 from ..common.types import N_RANGES
 from ..guidance.cues import CUE_STOP, PHRASES
 from ..perception.camera import CameraModel
-from ..perception.goal import GoalTracker, MarkerGoal, VisualYawEstimator
+from ..perception.goal import VisualYawEstimator
 from .loop import LiveLoop, PerceptionWorker, RuntimeConfig
 from .policy import check_fan_coverage, load_policy
 
@@ -97,15 +96,15 @@ def parse_args():
     ap.add_argument("--checkpoint", default="artifacts/nav_policy.pt")
     ap.add_argument("--camera", default="configs/camera.json")
     ap.add_argument("--hfov", type=float, default=70.0)
+    ap.add_argument("--frame-fit", choices=["auto", "crop", "scale"], default="auto",
+                    help="how stream frames relate to the calibration: crop, scale, or auto "
+                         "(crop if within 10%% of the calibration size, else scale)")
     ap.add_argument("--depth-scale", type=float, default=1.0)
-    ap.add_argument("--goal", default="10,0")
-    ap.add_argument("--marker-id", type=int, default=None)
-    ap.add_argument("--marker-size", type=float, default=0.15)
     ap.add_argument("--speed", type=float, default=1.2)
     ap.add_argument("--control-hz", type=float, default=6.0)
     ap.add_argument("--resume-s", type=float, default=10.0,
                     help="a reconnect within this many seconds continues the walk "
-                         "(keeps the tracked goal); later ones start from --goal")
+                         "(keeps any avoidance turn in progress); later ones start fresh")
     ap.add_argument("--no-yaw", action="store_true")
     ap.add_argument("--greedy", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
@@ -128,24 +127,23 @@ class Session:
     """One stream of w x h frames from the phone: camera model, perception
     worker and control loop."""
 
-    def __init__(self, a, models, width, height, goal, clock, speaker):
+    def __init__(self, a, models, width, height, tracker, clock, speaker):
         depth_model, policy = models
         if os.path.exists(a.camera):
-            cam = CameraModel.load(a.camera).fitted(width, height, "crop")
+            cam = CameraModel.load(a.camera).fitted(width, height, a.frame_fit)
         else:
             print(f"{a.camera} not found; using an uncalibrated {a.hfov:.0f} deg model")
             cam = CameraModel.from_fov(width, height, hfov_deg=a.hfov)
+        print(f"[relay] camera model: {np.degrees(cam.hfov_rad):.0f} deg horizontal")
         check_fan_coverage(cam, policy.fov_deg)
 
         cfg = RuntimeConfig(control_hz=a.control_hz, walking_speed=a.speed,
                             fov_deg=policy.fov_deg)
-        marker = MarkerGoal(cam, a.marker_id, a.marker_size) if a.marker_id is not None else None
 
         self.size = (width, height)
         self.camera, self.speaker = StreamCamera(), speaker
         self.worker = PerceptionWorker(self.camera, depth_model, cam, cfg.fov_deg, clock=clock)
-        self.loop = LiveLoop(self.camera, policy, speaker, self.worker,
-                             GoalTracker(goal, marker),
+        self.loop = LiveLoop(self.camera, policy, speaker, self.worker, tracker,
                              yaw_estimator=None if a.no_yaw else VisualYawEstimator(cam),
                              cfg=cfg, clock=clock)
         self.worker.start()
@@ -158,13 +156,13 @@ class RelayState:
     def __init__(self):
         self.session = None        # what the control thread steps
         self.ws = None             # the connection feeding it
-        self.goal = None           # goal left by the last session, for --resume-s
+        self.tracker = None        # path tracker left by the last session, for --resume-s
         self.ended_at = -np.inf
 
 
 LOG_HEADER = (["frame", "t", "degraded", "policy_action", "action", "cue", "said",
-               "override", "stop_filtered", "min_range", "goal_x", "goal_y", "speed",
-               "depth_ms"]
+               "override", "stop_filtered", "min_range", "path_offset_deg", "tracking",
+               "speed", "depth_ms"]
               + [f"r{i}" for i in range(N_RANGES)])      # same columns as replay.py
 
 
@@ -211,7 +209,7 @@ def _tick(sess, log, clock, k):
         worker.last_error = None
     said = sess.speaker.pop()
 
-    ranges, goal = rec.get("ranges"), rec.get("goal")
+    ranges, offset = rec.get("ranges"), rec.get("path_offset")
     filtered = bool(rec.get("stop_filtered"))
     override = (not filtered and
                 rec.get("policy_action", CUE_STOP) != rec.get("action", CUE_STOP))
@@ -221,36 +219,34 @@ def _tick(sess, log, clock, k):
          rec.get("policy_action", ""), rec.get("action", ""),
          PHRASES.get(rec.get("action"), ""), said, int(override), int(filtered),
          "" if ranges is None else f"{ranges.min():.2f}",
-         *(["", ""] if goal is None else [f"{goal[0]:.2f}", f"{goal[1]:.2f}"]),
+         "" if offset is None else f"{np.degrees(offset):.1f}",
+         int(bool(rec.get("tracking"))),
          f"{rec.get('speed', '')}",
          "" if ms is None else f"{ms * 1e3:.0f}"]
         + ([""] * N_RANGES if ranges is None else [f"{r:.2f}" for r in ranges]))
     if k % 5 == 0:
         mn = "--" if ranges is None else f"{ranges.min():4.1f}"
+        off = "" if offset is None or not rec.get("tracking") else f" | off path {np.degrees(offset):+.0f} deg"
         print(f"{k:5d} | {('%.0f' % (ms * 1e3)) if ms else '--':>4}ms | "
-              f"min {mn} m | {rec.get('degraded') or PHRASES.get(rec.get('action'), 'silent')}")
+              f"min {mn} m | {rec.get('degraded') or PHRASES.get(rec.get('action'), 'silent')}{off}")
 
 
-async def serve(a, goal0, clock, state):
+async def serve(a, clock, state):
     models = asyncio.ensure_future(asyncio.to_thread(load_models, a))
 
     def end_session():
         sess, state.session = state.session, None
         if sess is not None:
             sess.close()
-            g = sess.loop.goal_tracker.goal
-            state.goal = None if g is None else g.copy()
+            state.tracker = sess.loop.path
             state.ended_at = clock()
 
     def open_session(width, height, speaker):
         end_session()
-        goal = state.goal if clock() - state.ended_at <= a.resume_s else None
-        if goal is not None:
-            print(f"[relay] {width}x{height}, resuming walk: goal ({goal[0]:.1f}, {goal[1]:.1f}) m")
-        else:
-            goal = goal0
-            print(f"[relay] {width}x{height}, new walk")
-        return Session(a, models.result(), width, height, goal, clock, speaker)
+        resume = state.tracker is not None and clock() - state.ended_at <= a.resume_s
+        tracker = state.tracker if resume else PathTracker()
+        print(f"[relay] {width}x{height}, " + ("resuming walk" if resume else "new walk"))
+        return Session(a, models.result(), width, height, tracker, clock, speaker)
 
     async def handler(ws):
         if state.ws is not None:
@@ -319,16 +315,12 @@ async def serve(a, goal0, clock, state):
 
 def main():
     a = parse_args()
-    goal0 = [float(v) for v in a.goal.split(",")] if a.goal else None
-    if goal0 is None and a.marker_id is None:
-        raise SystemExit("need --goal and/or --marker-id")
-
     clock, state, stop_evt = RealClock(), RelayState(), threading.Event()
     ctrl = threading.Thread(target=control_thread, args=(state, a, clock, stop_evt),
                             daemon=True)
     ctrl.start()
     try:
-        asyncio.run(serve(a, goal0, clock, state))
+        asyncio.run(serve(a, clock, state))
     except KeyboardInterrupt:
         print("\n[relay] stopped")
     finally:
