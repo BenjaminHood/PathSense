@@ -72,8 +72,9 @@ def test_camera_ranges_equal_env_ranges_random_scenes(seed):
 
 def test_action_ids_match_env():
     for name in ("STAY_SILENT", "CUE_LEFT", "CUE_RIGHT", "CUE_STOP", "CUE_STRAIGHT",
-                 "N_ACTIONS", "TURN_STEP"):
+                 "N_ACTIONS"):
         assert getattr(cues, name) == getattr(env_mod, name), name
+    assert np.isclose(cues.TURN_STEP, np.deg2rad(EnvConfig().turn_deg))
 
 
 def test_spoken_words_match_what_the_sim_action_does():
