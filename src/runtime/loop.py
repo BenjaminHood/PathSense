@@ -67,7 +67,7 @@ class PerceptionWorker:
             depth = self.depth_model(rgb)
             cam = self.cam.resized(depth.shape[1], depth.shape[0])
             ranges = depth_to_ranges(depth, cam, self.fov_deg)
-            
+
         except Exception as e:            # model failure = perception dropout
             self.last_error = repr(e)
 
@@ -84,6 +84,11 @@ class PerceptionWorker:
     def latest(self):
         with self._lock:
             return self._ranges, self._t
+
+    def get_latest_view(self):
+        """The frame and depth view under the latest FOV"""
+        with self._lock:
+            return self._view
 
     def start(self):
         self._running = True
