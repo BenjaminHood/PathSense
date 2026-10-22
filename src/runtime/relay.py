@@ -94,7 +94,7 @@ class SerialModel:
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--checkpoint", default="artifacts/settings_final/nav_policy.pt")
+    ap.add_argument("--checkpoint", default="artifacts/nav_policy.pt")
     ap.add_argument("--camera", default="configs/camera.json")
     ap.add_argument("--hfov", type=float, default=70.0)
     ap.add_argument("--depth-scale", type=float, default=1.0)
