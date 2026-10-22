@@ -7,7 +7,7 @@ from src.agents.config import PPOConfig
 from src.agents.policies import make_policy
 from src.envs.config import EnvConfig
 from src.envs.pathsense_env import PathSenseEnv
-from src.eval.baselines import run_episodes, random_policy
+from src.eval.baselines import run_episodes, random_policy, silent_policy
 
 
 def load_policy(env, path="artifacts/nav_policy.pt"):
@@ -42,6 +42,7 @@ if __name__ == "__main__":
         "Random":        run_episodes(random_policy(env), env, n_episodes=1000),
         "PPO (greedy)":  run_episodes(greedy(policy), env, n_episodes=1000),
         "PPO (sampled)": run_episodes(sampled(policy), env, n_episodes=1000),
+        "Silent":        run_episodes(silent_policy(env), env, n_episodes=1000),
     }
     for k, v in results.items():
         print(f"{k:16s} {v}")

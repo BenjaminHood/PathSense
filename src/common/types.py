@@ -3,30 +3,24 @@ import numpy as np
 
 N_RANGES = 16          # rays in the depth fan
 MAX_RANGE = 8.0        # metres; readings clipped to this
-MAX_GOAL = 20.0        # metres; farther goals are fed in at this distance (same direction).
-                       #   The sim arena only has goals ~8-27 m away; a 70 m goal pushed
-                       #   the input far outside anything the policy trained on.
 
 
 @dataclass(frozen=True)
 class Observation:
-    
+
 
     ranges: np.ndarray      # (N_RANGES,) float32, metres, left→right across FOV,
                             #   clipped to MAX_RANGE, MAX_RANGE means "clear"
-    goal_vector: np.ndarray # (2,) float32, goal position in AGENT frame, metres
-                            #   (+x = forward, +y = left)
+    path_offset: float      # radians, how far avoidance cues have turned the walker off
+                            #   their own path (+ = now heading left of it); 0 when no
+                            #   avoidance turn is in progress (see PathTracker)
     speed: float            # float32, m/s, forward speed last step
 
     def to_array(self) -> np.ndarray:
-       
-        goal = np.asarray(self.goal_vector, np.float64)
-        dist = np.linalg.norm(goal)
-        if dist > MAX_GOAL:
-            goal = goal * (MAX_GOAL / dist)
+
         return np.concatenate([
             self.ranges / MAX_RANGE,
-            goal / MAX_RANGE,
+            [np.cos(self.path_offset), np.sin(self.path_offset)],
             [self.speed],
         ]).astype(np.float32)
 

@@ -1,0 +1,4 @@
+Random           {'return': -41.03843629815616, 'steps': 383.26, 'cues': 306.505, 'success': 0.029}
+PPO (greedy)     {'return': -7.3938580050835405, 'steps': 386.337, 'cues': 76.931, 'success': 0.129}
+PPO (sampled)    {'return': 50.23983584023631, 'steps': 106.022, 'cues': 19.098, 'success': 0.874}
+wrote artifacts/figures\evaluation.png

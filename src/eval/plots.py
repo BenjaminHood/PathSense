@@ -136,16 +136,19 @@ def plot_eval(results, name="evaluation.png"):
     _style()
 
     metrics = [
-        ("success", "Success rate",       "{:.2f}"),
-        ("return",  "Mean return",        "{:.1f}"),
-        ("steps",   "Mean episode length","{:.0f}"),
-        ("cues",    "Mean cues issued",   "{:.1f}"),
+        ("collision",    "Collision rate (lower is better)",   "{:.2f}"),
+        ("progress_m",   "Metres walked along own path",       "{:.1f}"),
+        ("cues_per_min", "Cues per minute (lower is better)",  "{:.0f}"),
+        ("stopped",      "Share of time stopped",              "{:.2f}"),
+        ("offset_deg",   "Mean offset from own path (deg)",    "{:.1f}"),
+        ("return",       "Mean return",                        "{:.1f}"),
     ]
     labels = list(results)
-    colors = [C_BLUE, C_ORANGE, C_AQUA][:len(labels)]
+    # a 4th entry (e.g. the silent baseline) is drawn in neutral grey as a reference
+    colors = [C_BLUE, C_ORANGE, C_AQUA, MUTED][:len(labels)]
     x = np.arange(len(labels))
 
-    fig, axes = plt.subplots(2, 2, figsize=(8, 6.5))
+    fig, axes = plt.subplots(2, 3, figsize=(11, 6.5))
 
     for ax, (key, heading, fmt) in zip(axes.ravel(), metrics):
         vals = [results[k][key] for k in labels]
@@ -181,19 +184,17 @@ def plot_trajectory(env, policy_fn, seed=0, name="trajectory.png", label=""):
 
     obs, info = env.reset(seed=seed)
     path = [env.pos.copy()]
+    intent = [env.path_heading]          # walker's own intended direction over time
     cue_points = []
-    reached = False
 
     while True:
         action = policy_fn(obs)
         obs, reward, terminated, truncated, info = env.step(action)
         path.append(env.pos.copy())
+        intent.append(env.path_heading)
         if action != 0:
             cue_points.append(env.pos.copy())
-        if terminated:
-            reached = not info.get("collision", False)
-            break
-        if truncated:
+        if terminated or truncated:
             break
 
     path = np.asarray(path)
@@ -215,13 +216,15 @@ def plot_trajectory(env, policy_fn, seed=0, name="trajectory.png", label=""):
 
     ax.scatter(*path[0], s=90, facecolor="none", edgecolor=C_BLUE, lw=2,
                zorder=5, label="start")
-    ax.scatter(*env.goal, s=240, marker="*", color=C_AQUA, zorder=5,
-               label="goal")
-    ax.add_patch(plt.Circle(env.goal, env.cfg.goal_radius, facecolor="none",
-                            edgecolor=C_AQUA, lw=1.0, ls=":", zorder=2))
 
-    outcome = "goal reached" if reached else (
-        "collision" if info.get("collision") else "timed out")
+    # short arrows every ~25 steps: the direction the walker meant to go
+    idx = np.arange(0, len(path), 25)
+    d = np.stack([np.cos(np.take(intent, idx)), np.sin(np.take(intent, idx))], axis=1)
+    ax.quiver(path[idx, 0], path[idx, 1], d[:, 0], d[:, 1], color=C_AQUA,
+              angles="xy", scale_units="xy", scale=0.8, width=0.005, zorder=4,
+              label="intended direction")
+
+    outcome = "collision" if info.get("collision") else "completed, no collision"
     heading = f"{label} — {outcome}" if label else outcome
     ax.set_title(heading, loc="left", pad=10)
     ax.text(0.0, 1.0,
