@@ -73,7 +73,7 @@ class RecordingSpeaker:
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
-    ap.add_argument("--checkpoint", default="artifacts/policy.pt")
+    ap.add_argument("--checkpoint", default="artifacts/nav_policy.pt")
     ap.add_argument("--camera", default="configs/camera.json", help="calibration file")
     ap.add_argument("--hfov", type=float, default=70.0, help="used if --camera file is missing")
     ap.add_argument("--frame-fit", choices=["crop", "scale"], default="crop",

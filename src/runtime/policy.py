@@ -8,7 +8,7 @@ from ..common.types import N_RANGES, OBS_DIM
 from ..guidance.cues import N_ACTIONS
 
 
-def load_policy(path: str = "artifacts/policy.pt", sample: bool = True, seed: int = 0):
+def load_policy(path: str = "artifacts/nav_policy.pt", sample: bool = True, seed: int = 0):
     """Load a checkpoint with sampled policy"""
     
 
@@ -32,7 +32,7 @@ def load_policy(path: str = "artifacts/policy.pt", sample: bool = True, seed: in
     return act
 
 
-def load_greedy_policy(path: str = "artifacts/policy.pt"):
+def load_greedy_policy(path: str = "artifacts/nav_policy.pt"):
     return load_policy(path, sample=False)
 
 

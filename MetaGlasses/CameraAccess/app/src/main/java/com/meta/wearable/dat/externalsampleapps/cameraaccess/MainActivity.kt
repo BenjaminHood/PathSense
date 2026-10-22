@@ -136,7 +136,7 @@ class MainActivity : ComponentActivity() {
       }
     }
 
-    relay = RelayClient("ws://192.168.1.118:8765") { phrase ->
+    relay = RelayClient("ws://127.0.0.1:8765") { phrase ->
       runOnUiThread {
         tts.speak(phrase, TextToSpeech.QUEUE_FLUSH, null, null)
       }

@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml",
     "matplotlib",
     "websockets",
+    "av",                          # HEVC decode for the live relay
 ]
 
 [project.optional-dependencies]

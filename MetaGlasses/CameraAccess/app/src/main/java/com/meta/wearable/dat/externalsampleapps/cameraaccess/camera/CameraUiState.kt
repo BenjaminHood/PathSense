@@ -38,7 +38,9 @@ data class CameraUiState(
     val isRecording: Boolean = false,
     val recordingElapsedSeconds: Long = 0L,
     // Sound-in-video toggle (glasses mic over HFP), locked once recording starts.
-    val includeAudioInStream: Boolean = true,
+    // Off by default: turning it on puts the phone in call mode, which routes TTS cues over the
+    // quieter call channel.
+    val includeAudioInStream: Boolean = false,
     // The capture currently shown in the shared preview/share sheet (photo or video).
     val activePreview: CapturePreview? = null,
     // Drives the confirm prompt shown before the camera-permission redirect to the Meta AI app.
