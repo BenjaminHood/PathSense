@@ -55,6 +55,7 @@ class PerceptionWorker:
         self.last_error = None
         self._lock = threading.Lock()
         self._running = False
+        self._view = None #behind the latest FOV for the depth view
 
     def run_once(self) -> bool:
         frame, t_frame = self.camera.latest()
@@ -66,13 +67,18 @@ class PerceptionWorker:
             depth = self.depth_model(rgb)
             cam = self.cam.resized(depth.shape[1], depth.shape[0])
             ranges = depth_to_ranges(depth, cam, self.fov_deg)
+            
         except Exception as e:            # model failure = perception dropout
             self.last_error = repr(e)
+
             return False
+        
         with self._lock:
-            # Timestamp with the FRAME time: the fan is as old as its image.
+            # Timestamp with the frame time
             self._ranges, self._t, self._frame_t = ranges, t_frame, t_frame
+            self._view = (frame, depth)
             self.last_latency_s = time.perf_counter() - t0
+
         return True
 
     def latest(self):
