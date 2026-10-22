@@ -128,18 +128,30 @@ class Annotator:
     coloured by distance, with rays outside the camera's view faded.
     """
 
-    def __init__(self, width, height, cam_hfov_deg, fan_fov_deg, stop_range_m):
+    def __init__(self, width, height, cam_hfov_deg, fan_fov_deg, stop_range_m,
+                 cam, depth_view):
         self.s = min(width, height) / 1000          # scale everything with resolution
         self.cam_half, self.fan_fov = cam_hfov_deg / 2, fan_fov_deg
         self.stop_range = stop_range_m
         self.said, self.said_t = "", -np.inf
+        self.cam = cam
+        self.depth_view = depth_view
 
-    def __call__(self, frame, rec, said, t, k):
+    def __call__(self, frame, rec, said, t, k, depth):
         img = frame.copy()
+        show_depth = depth is not None and self.depth_view != "off"
+        if show_depth and self.depth_view == "blend":
+            self._depth(img, depth)
         if said:
             self.said, self.said_t = said, t
-        self._header(img, rec, t, k)
+        head_bottom = self._header(img, rec, t, k)
         fan_top = self._fan(img, rec.get("ranges"))
+        if show_depth and self.depth_view == "inset":
+            self._depth(img, depth, top=head_bottom)
+        self._ray_lines(img, rec.get("ranges"), head_bottom, fan_top)
+        if show_depth:
+            self._put(img, "depth: red = near, blue = 8 m+",
+                      (int(24 * self.s), head_bottom + int(30 * self.s)), 0.45, WHITE)
         if t - self.said_t <= SAID_HOLD_S:
             self._subtitle(img, self.said, fan_top)
         return img
@@ -179,7 +191,7 @@ class Annotator:
                              f"(policy wanted '{wanted}')", RED))
         return head, color, icon, notes
 
-    def _header(self, img, rec, t, k):
+    def _header(self, img, rec, t, k,):
         s, w = self.s, img.shape[1]
         pad, r = int(24 * s), int(40 * s)
         head, color, icon, notes = self._status(rec)
@@ -318,6 +330,34 @@ class Annotator:
         self._put(img, "SPOKEN", ((w - lw) // 2, y0 + pad + int(10 * s)), 0.45, GREY)
         self._put(img, msg, (w // 2, y1 - pad), 1.1, YELLOW, bold=True, anchor="center")
 
+    def _depth(self, img, depth, top=0):
+        """Colour the metric depth map"""
+
+        near = 1.0 - np.clip(depth / MAX_RANGE, 0.0, 1.0)
+        colour = cv2.applyColorMap((near * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+        h, w = img.shape[:2]
+        if colour.shape[:2] != (h, w):
+            colour = cv2.resize(colour, (w, h))
+        if self.depth_view == "blend":
+            cv2.addWeighted(colour, 0.45, img, 0.55, 0, dst=img)
+        else:                                   # inset, top right under the header
+            iw, ih = w // 3, h // 3
+            y0, x0 = top + int(10 * self.s), w - iw - int(10 * self.s)
+            img[y0:y0 + ih, x0:x0 + iw] = cv2.resize(colour, (iw, ih))
+
+    def _ray_lines(self, img, ranges, top, bottom):
+        """A line at the image column each ray samples, coloured by its range."""
+        if ranges is None or self.cam is None:
+            return
+        half = np.radians(self.fan_fov / 2)
+        # azimuth of each ray, + = right, in the same order as depth_to_ranges
+        az = np.linspace(half, -half, N_RANGES) if INDEX0_IS_RIGHT else np.linspace(-half, half, N_RANGES)
+        for d, a in zip(ranges, az):
+            u = self.cam.cx + self.cam.fx * np.tan(a)
+            if 0 <= u < img.shape[1]:
+                cv2.line(img, (int(u), top), (int(u), bottom), self._dist_color(d),
+                         max(1, round(2 * self.s)), AA)
+
 
 def main():
     a = parse_args()
@@ -353,6 +393,9 @@ def main():
     out = None
     annotator = Annotator(frame.shape[1], frame.shape[0], np.degrees(cam.hfov_rad),
                           cfg.fov_deg, cfg.stop_range_m)
+    view = worker.get_latest_view()
+    img = annotator(frame, rec, said, clock.t, k,
+                    depth=None if view is None else view[1])
     stats = {"ticks": 0, "degraded": 0, "override": 0, "filtered": 0, "spoken": 0,
              "depth_ms": []}
     k = -1
