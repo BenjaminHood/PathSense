@@ -18,6 +18,7 @@ import os
 import threading
 import time
 import traceback
+import cv2
 
 import av
 import numpy as np
@@ -30,6 +31,7 @@ from ..perception.camera import CameraModel
 from ..perception.goal import VisualYawEstimator
 from .loop import LiveLoop, PerceptionWorker, RuntimeConfig
 from .policy import check_fan_coverage, load_policy
+from .replay import Annotator
 
 
 class RealClock:
@@ -77,6 +79,24 @@ class LiveSpeaker:
         text, self.said = " | ".join(self.said), []
         return text
 
+class LiveViewer:
+    """Annotates the live frames from the control thread to the websocket"""
+
+    def __init__(self, aloop):
+        self.aloop, self.q = aloop, asyncio.Queue(maxsize=1)
+        self.wanted = False
+
+    def offer(self, jpeg: bytes):
+        def put():
+            if self.q.full():
+                self.q.get_nowait() # drops the frames which phone did not recieved
+
+            self.q.put_nowait(jpeg)
+        try:
+            self.aloop.call_soon_threadsafe(put)
+        except RuntimeError:               # event loop already closed: shutting down
+            pass
+
 
 class SerialModel:
     """One inference at a time: a closed session's worker can still be
@@ -109,6 +129,9 @@ def parse_args():
     ap.add_argument("--greedy", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="artifacts/live")
+    ap.add_argument("--view-fps", type=float, default=5.0, help="depth-view frames per second sent to the phone")
+    ap.add_argument("--depth-view", choices=["blend", "inset", "off"], default="blend")
+    ap.add_argument("--show", action="store_true", help="also show how the depth view in a computer window")
     return ap.parse_args()
 
 
@@ -154,9 +177,9 @@ class Session:
 
 class RelayState:
     def __init__(self):
-        self.session = None        # what the control thread steps
-        self.ws = None             # the connection feeding it
-        self.tracker = None        # path tracker left by the last session, for --resume-s
+        self.session = None # what the control thread steps
+        self.ws = None # the connection feeding it
+        self.tracker = None # path tracker left by the last session, for --resume-s
         self.ended_at = -np.inf
 
 
