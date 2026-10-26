@@ -1,11 +1,11 @@
 """Run the live PathSense pipeline over recorded glasses video.
 
-Drives the real PerceptionWorker + LiveLoop (depth, ranges, goal tracking,
+Drives the real PerceptionWorker + LiveLoop (depth, ranges, path tracking,
 safety override, cue gate, speed model) one frame at a time on a clock taken
 from the video timestamps, so results are deterministic and don't depend on
 how fast the depth model runs.
 
-  python -m src.runtime.replay --video glasses.mp4 --goal 10,0 --annotate
+  python -m src.runtime.replay --video glasses.mp4 --annotate
 """
 import argparse
 import csv
@@ -14,10 +14,11 @@ import os
 import cv2
 import numpy as np
 
+from ..common.path import PathTracker
 from ..common.types import MAX_RANGE, N_RANGES
 from ..guidance.cues import CUE_STOP, CUE_STRAIGHT, PHRASES, STAY_SILENT
 from ..perception.camera import CameraModel
-from ..perception.goal import GoalTracker, MarkerGoal, VisualYawEstimator
+from ..perception.goal import VisualYawEstimator
 from ..perception.ranges import INDEX0_IS_RIGHT
 from .loop import LiveLoop, PerceptionWorker, RuntimeConfig
 from .policy import check_fan_coverage, load_policy
@@ -76,16 +77,15 @@ def parse_args():
     ap.add_argument("--checkpoint", default="artifacts/nav_policy.pt")
     ap.add_argument("--camera", default="configs/camera.json", help="calibration file")
     ap.add_argument("--hfov", type=float, default=70.0, help="used if --camera file is missing")
-    ap.add_argument("--frame-fit", choices=["crop", "scale"], default="crop",
-                    help="how frames of another size relate to the calibration: the glasses "
-                         "crop (focal length in px unchanged); 'scale' for resized video")
+    ap.add_argument("--frame-fit", choices=["auto", "crop", "scale"], default="auto",
+                    help="how frames of another size relate to the calibration: crop (focal "
+                         "length in px unchanged), scale (resized video), or auto (crop if "
+                         "within 10%% of the calibration size, else scale)")
     ap.add_argument("--depth-scale", type=float, default=1.0)
-    ap.add_argument("--goal", default="10,0", help="initial goal 'x,y' metres (fwd, left)")
-    ap.add_argument("--marker-id", type=int, default=None)
-    ap.add_argument("--marker-size", type=float, default=0.15)
     ap.add_argument("--speed", type=float, default=1.2, help="walking speed, m/s")
     ap.add_argument("--every", type=int, default=3, help="process every Nth frame")
-    ap.add_argument("--no-yaw", action="store_true", help="disable optical-flow yaw")
+    ap.add_argument("--no-yaw", action="store_true",
+                    help="disable optical-flow yaw (the path offset then stays at 0)")
     ap.add_argument("--greedy", action="store_true",
                     help="always take the most likely action instead of sampling")
     ap.add_argument("--seed", type=int, default=0, help="action-sampling seed")
@@ -107,8 +107,7 @@ def load_cam(a, width, height):
 FONT, AA = cv2.FONT_HERSHEY_DUPLEX, cv2.LINE_AA
 WHITE, GREY, DIM = (255, 255, 255), (185, 185, 185), (110, 110, 110)          # BGR
 GREEN, YELLOW, ORANGE, RED = (90, 205, 80), (60, 215, 245), (40, 150, 255), (70, 70, 235)
-DEGRADED_TEXT = {"camera": "camera feed lost", "perception": "waiting for depth",
-                 "no_goal": "no goal set"}
+DEGRADED_TEXT = {"camera": "camera feed lost", "perception": "waiting for depth"}
 SAID_HOLD_S = 2.0        # keep a spoken cue on screen this long so it can be read
 
 
@@ -122,24 +121,37 @@ class Annotator:
     """Draws a HUD over each replay frame.
 
     Top: the current cue as a big coloured headline with an icon, plus why it was
-    chosen (safety override, cooldown, degraded mode), time/speed, and a compass
-    pointing at the goal. Middle: the last spoken phrase, held for SAID_HOLD_S.
+    chosen (safety override, cooldown, degraded mode), time/speed, and a dial
+    showing how far cues have turned the wearer off their own path and which way
+    it lies. Middle: the last spoken phrase, held for SAID_HOLD_S.
     Bottom: the obstacle fan, laid out as the wearer sees it (left on the left),
     coloured by distance, with rays outside the camera's view faded.
     """
 
-    def __init__(self, width, height, cam_hfov_deg, fan_fov_deg, stop_range_m):
+    def __init__(self, width, height, cam_hfov_deg, fan_fov_deg, stop_range_m,
+                 cam, depth_view):
         self.s = min(width, height) / 1000          # scale everything with resolution
         self.cam_half, self.fan_fov = cam_hfov_deg / 2, fan_fov_deg
         self.stop_range = stop_range_m
         self.said, self.said_t = "", -np.inf
+        self.cam = cam
+        self.depth_view = depth_view
 
-    def __call__(self, frame, rec, said, t, k):
+    def __call__(self, frame, rec, said, t, k, depth):
         img = frame.copy()
+        show_depth = depth is not None and self.depth_view != "off"
+        if show_depth and self.depth_view == "blend":
+            self._depth(img, depth)
         if said:
             self.said, self.said_t = said, t
-        self._header(img, rec, t, k)
+        head_bottom = self._header(img, rec, t, k)
         fan_top = self._fan(img, rec.get("ranges"))
+        if show_depth and self.depth_view == "inset":
+            self._depth(img, depth, top=head_bottom)
+        self._ray_lines(img, rec.get("ranges"), head_bottom, fan_top)
+        if show_depth:
+            self._put(img, "depth: red = near, blue = 8 m+",
+                      (int(24 * self.s), head_bottom + int(30 * self.s)), 0.45, WHITE)
         if t - self.said_t <= SAID_HOLD_S:
             self._subtitle(img, self.said, fan_top)
         return img
@@ -160,8 +172,6 @@ class Annotator:
         if rec.get("degraded"):
             reason = DEGRADED_TEXT.get(rec["degraded"], rec["degraded"])
             return "PAUSED", ORANGE, "warn", [(f"Told to stop: {reason}", ORANGE)]
-        if rec.get("arrived"):
-            return "ARRIVED", GREEN, "check", [("Within reach of the goal", GREEN)]
         if action is None or action == STAY_SILENT:
             head, color, icon = "NO NEW CUE", GREY, "dots"
             notes.append(("Policy stays quiet: keep following the last cue", GREY))
@@ -181,7 +191,7 @@ class Annotator:
                              f"(policy wanted '{wanted}')", RED))
         return head, color, icon, notes
 
-    def _header(self, img, rec, t, k):
+    def _header(self, img, rec, t, k,):
         s, w = self.s, img.shape[1]
         pad, r = int(24 * s), int(40 * s)
         head, color, icon, notes = self._status(rec)
@@ -205,7 +215,7 @@ class Annotator:
         self._put(img, info, (pad, y_info), 0.62, GREY, max_w=text_w)
         for i, (txt, c) in enumerate(notes):
             self._put(img, txt, (pad, y_info + line * (i + 1)), 0.62, c, max_w=text_w)
-        self._compass(img, rec.get("goal"), (comp_cx, pad + int(36 * s) + comp_r), comp_r)
+        self._path_dial(img, rec, (comp_cx, pad + int(36 * s) + comp_r), comp_r)
 
     def _icon(self, img, kind, c, r, color):
         s, (cx, cy) = self.s, c
@@ -219,34 +229,38 @@ class Annotator:
         elif kind in ("bear left", "bear right"):
             d = -1 if kind == "bear left" else 1
             cv2.arrowedLine(img, pt(-0.35 * d, 0.5), pt(0.5 * d, -0.45), color, t, AA, tipLength=0.4)
-        elif kind == "check":
-            cv2.polylines(img, [np.array([pt(-0.45, 0), pt(-0.1, 0.35), pt(0.5, -0.4)])],
-                          False, color, t, AA)
         elif kind == "warn":
             self._put(img, "!", (cx, cy + int(0.4 * r)), 1.4, color, bold=True, anchor="center")
         elif kind == "dots":
             for dx in (-0.4, 0, 0.4):
                 cv2.circle(img, pt(dx, 0), max(2, int(0.1 * r)), color, -1, AA)
 
-    def _compass(self, img, goal, c, r):
-        """Top-down view: you at the centre, straight ahead is up, arrow points at the goal."""
+    def _path_dial(self, img, rec, c, r):
+        """Top-down view: you at the centre, straight ahead is up, arrow points
+        along the path you were walking before the last avoidance turn."""
         s, (cx, cy) = self.s, c
         cv2.circle(img, c, r, DIM, max(1, round(2 * s)), AA)
         cv2.line(img, (cx, cy - r), (cx, cy - r + int(12 * s)), GREY, max(1, round(2 * s)), AA)
         self._put(img, "ahead", (cx, cy - r - int(10 * s)), 0.45, GREY, anchor="center")
         cv2.circle(img, c, max(3, int(6 * s)), WHITE, -1, AA)
         y = cy + r + int(38 * s)
-        if goal is None:
-            self._put(img, "goal unknown", (cx, y), 0.55, GREY, anchor="center")
+        offset = rec.get("path_offset")
+        if offset is None:
+            self._put(img, "path unknown", (cx, y), 0.55, GREY, anchor="center")
             return
-        dist = float(np.hypot(*goal))
-        bearing = float(np.arctan2(goal[1], goal[0]))           # + = left (goal is fwd, left)
+        # offset > 0: walker is heading left of their path, so the path lies to the right
+        bearing = -float(offset)                                # + = left, like the fan
         tip = (int(cx - 0.85 * r * np.sin(bearing)), int(cy - 0.85 * r * np.cos(bearing)))
-        cv2.arrowedLine(img, c, tip, YELLOW, max(2, round(5 * s)), AA, tipLength=0.3)
+        tracking = rec.get("tracking", False)
+        cv2.arrowedLine(img, c, tip, YELLOW if tracking else GREEN, max(2, round(5 * s)), AA,
+                        tipLength=0.3)
         deg = np.degrees(bearing)
-        side = "dead ahead" if abs(deg) < 5 else f"{abs(deg):.0f} deg {'left' if deg > 0 else 'right'}"
-        self._put(img, f"Goal {dist:.1f} m", (cx, y), 0.6, WHITE, anchor="center")
-        self._put(img, side, (cx, y + int(32 * s)), 0.5, GREY, anchor="center")
+        if not tracking or abs(deg) < 5:
+            head, sub = "On your path", "no avoidance turn" if not tracking else "back on track"
+        else:
+            head, sub = f"Path {abs(deg):.0f} deg {'left' if deg > 0 else 'right'}", "turned off by a cue"
+        self._put(img, head, (cx, y), 0.6, WHITE, anchor="center")
+        self._put(img, sub, (cx, y + int(32 * s)), 0.5, GREY, anchor="center")
 
     def _dist_color(self, d):
         return RED if d < self.stop_range else ORANGE if d < 1.5 else YELLOW if d < 3.0 else GREEN
@@ -316,6 +330,34 @@ class Annotator:
         self._put(img, "SPOKEN", ((w - lw) // 2, y0 + pad + int(10 * s)), 0.45, GREY)
         self._put(img, msg, (w // 2, y1 - pad), 1.1, YELLOW, bold=True, anchor="center")
 
+    def _depth(self, img, depth, top=0):
+        """Colour the metric depth map"""
+
+        near = 1.0 - np.clip(depth / MAX_RANGE, 0.0, 1.0)
+        colour = cv2.applyColorMap((near * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+        h, w = img.shape[:2]
+        if colour.shape[:2] != (h, w):
+            colour = cv2.resize(colour, (w, h))
+        if self.depth_view == "blend":
+            cv2.addWeighted(colour, 0.45, img, 0.55, 0, dst=img)
+        else:                                   # inset, top right under the header
+            iw, ih = w // 3, h // 3
+            y0, x0 = top + int(10 * self.s), w - iw - int(10 * self.s)
+            img[y0:y0 + ih, x0:x0 + iw] = cv2.resize(colour, (iw, ih))
+
+    def _ray_lines(self, img, ranges, top, bottom):
+        """A line at the image column each ray samples, coloured by its range."""
+        if ranges is None or self.cam is None:
+            return
+        half = np.radians(self.fan_fov / 2)
+        # azimuth of each ray, + = right, in the same order as depth_to_ranges
+        az = np.linspace(half, -half, N_RANGES) if INDEX0_IS_RIGHT else np.linspace(-half, half, N_RANGES)
+        for d, a in zip(ranges, az):
+            u = self.cam.cx + self.cam.fx * np.tan(a)
+            if 0 <= u < img.shape[1]:
+                cv2.line(img, (int(u), top), (int(u), bottom), self._dist_color(d),
+                         max(1, round(2 * self.s)), AA)
+
 
 def main():
     a = parse_args()
@@ -335,18 +377,13 @@ def main():
     depth_model = DepthAnythingMetric(scale=a.depth_scale)
 
     clock, camera, speaker = SimClock(), VideoFrameCamera(), RecordingSpeaker()
-    marker = MarkerGoal(cam, a.marker_id, a.marker_size) if a.marker_id is not None else None
-    goal0 = [float(v) for v in a.goal.split(",")] if a.goal else None
-    if goal0 is None and marker is None:
-        raise SystemExit("need --goal and/or --marker-id")
 
     policy = load_policy(a.checkpoint, sample=not a.greedy, seed=a.seed)
     check_fan_coverage(cam, policy.fov_deg)
-    # One control tick per processed frame, so dead-reckoning uses the real time step.
+    # One control tick per processed frame, so the path tracker's timers use the real step.
     cfg = RuntimeConfig(control_hz=fps / a.every, walking_speed=a.speed, fov_deg=policy.fov_deg)
     worker = PerceptionWorker(camera, depth_model, cam, cfg.fov_deg, clock=clock)
-    loop = LiveLoop(camera, policy, speaker, worker,
-                    GoalTracker(goal0, marker),
+    loop = LiveLoop(camera, policy, speaker, worker, PathTracker(),
                     yaw_estimator=None if a.no_yaw else VisualYawEstimator(cam),
                     cfg=cfg, clock=clock)
     if a.speed_model == "constant":
@@ -356,14 +393,17 @@ def main():
     out = None
     annotator = Annotator(frame.shape[1], frame.shape[0], np.degrees(cam.hfov_rad),
                           cfg.fov_deg, cfg.stop_range_m)
+    view = worker.get_latest_view()
+    img = annotator(frame, rec, said, clock.t, k,
+                    depth=None if view is None else view[1])
     stats = {"ticks": 0, "degraded": 0, "override": 0, "filtered": 0, "spoken": 0,
              "depth_ms": []}
     k = -1
     with open(os.path.join(a.out, "log.csv"), "w", newline="") as f:
         log = csv.writer(f)
         log.writerow(["frame", "t", "degraded", "policy_action", "action", "cue", "said",
-                      "override", "stop_filtered", "min_range", "goal_x", "goal_y", "speed",
-                      "depth_ms"]
+                      "override", "stop_filtered", "min_range", "path_offset_deg", "tracking",
+                      "speed", "depth_ms"]
                      + [f"r{i}" for i in range(N_RANGES)])
         while True:
             ok, frame = cap.read()
@@ -383,7 +423,7 @@ def main():
             rec = loop.step()
             said = speaker.pop()
 
-            ranges, goal = rec.get("ranges"), rec.get("goal")
+            ranges, offset = rec.get("ranges"), rec.get("path_offset")
             filtered = bool(rec.get("stop_filtered"))
             override = (not filtered and
                         rec.get("policy_action", CUE_STOP) != rec.get("action", CUE_STOP))
@@ -396,7 +436,8 @@ def main():
                 [k, f"{clock.t:.3f}", rec.get("degraded", ""), rec.get("policy_action", ""),
                  rec.get("action", ""), PHRASES.get(rec.get("action"), ""), said,
                  int(override), int(filtered), "" if ranges is None else f"{ranges.min():.2f}",
-                 *(["", ""] if goal is None else [f"{goal[0]:.2f}", f"{goal[1]:.2f}"]),
+                 "" if offset is None else f"{np.degrees(offset):.1f}",
+                 int(bool(rec.get("tracking"))),
                  f"{rec.get('speed', '')}",
                  "" if worker.last_latency_s is None else f"{worker.last_latency_s * 1e3:.0f}"]
                 + ([""] * N_RANGES if ranges is None else [f"{r:.2f}" for r in ranges]))
@@ -408,11 +449,6 @@ def main():
                     out = cv2.VideoWriter(os.path.join(a.out, "annotated.mp4"),
                                           cv2.VideoWriter_fourcc(*"mp4v"), fps / a.every, (w, h))
                 out.write(img)
-
-            if rec.get("arrived"):
-                print(f"arrived at frame {k} (t={clock.t:.1f}s); "
-                      "pass a farther --goal to replay the whole clip")
-                break
 
     cap.release()
     if out is not None:

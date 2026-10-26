@@ -5,10 +5,11 @@ import time
 
 import numpy as np
 
+from src.common.path import PathTracker
 from src.guidance.cues import PHRASES
 from src.guidance.tts import make_speaker
 from src.perception.camera import CameraModel
-from src.perception.goal import GoalTracker, MarkerGoal, VisualYawEstimator
+from src.perception.goal import VisualYawEstimator
 from src.runtime.loop import LiveLoop, PerceptionWorker, RuntimeConfig
 from src.runtime.policy import check_fan_coverage, load_policy
 from src.runtime.camera import StaticCamera, ThreadedCamera
@@ -19,14 +20,11 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", default="configs/camera.json", help="calibration (Step 2)")
     ap.add_argument("--hfov", type=float, default=70.0, help="used if --camera file is missing")
-    ap.add_argument("--frame-fit", choices=["crop", "scale"], default="crop",
-                    help="how frames of another size relate to the calibration: the glasses "
-                         "crop (focal length in px unchanged); 'scale' for resized video")
+    ap.add_argument("--frame-fit", choices=["auto", "crop", "scale"], default="auto",
+                    help="how frames of another size relate to the calibration: crop, scale, "
+                         "or auto (crop if within 10%% of the calibration size, else scale)")
     ap.add_argument("--device", default="0", help="webcam index, video file or stream URL")
-    ap.add_argument("--checkpoint", default="artifacts/policy.pt")
-    ap.add_argument("--goal", default=None, help="initial goal 'x,y' metres (fwd, left)")
-    ap.add_argument("--marker-id", type=int, default=None)
-    ap.add_argument("--marker-size", type=float, default=0.15)
+    ap.add_argument("--checkpoint", default="artifacts/nav_policy.pt")
     ap.add_argument("--speed", type=float, default=1.2, help="walking speed, m/s")
     ap.add_argument("--greedy", action="store_true",
                     help="always take the most likely action instead of sampling")
@@ -66,19 +64,19 @@ def build(a):
         print("loading depth model ...", flush=True)
         depth_model = DepthAnythingMetric()
 
-    marker = MarkerGoal(cam, a.marker_id, a.marker_size) if a.marker_id is not None else None
-    goal0 = [float(v) for v in a.goal.split(",")] if a.goal else None
-    if goal0 is None and marker is None:
-        raise SystemExit("need --goal and/or --marker-id")
-
     policy = load_policy(a.checkpoint, sample=not a.greedy)
     check_fan_coverage(cam, policy.fov_deg)
     cfg = RuntimeConfig(walking_speed=a.speed, fov_deg=policy.fov_deg)
     worker = PerceptionWorker(camera, depth_model, cam, cfg.fov_deg)
-    loop = LiveLoop(camera, policy, make_speaker(not a.no_speech),
-                    worker, GoalTracker(goal0, marker),
+    loop = LiveLoop(camera, policy, make_speaker(not a.no_speech), worker, PathTracker(),
                     yaw_estimator=None if a.dry_run else VisualYawEstimator(cam), cfg=cfg)
     return loop, worker, camera
+
+
+def _path_text(rec):
+    if not rec.get("tracking"):
+        return "on path"
+    return f"off path {np.degrees(rec.get('path_offset', 0.0)):+.0f} deg"
 
 
 def show(rec, camera):
@@ -89,7 +87,7 @@ def show(rec, camera):
         return True
     img = frame.copy()
     txt = rec.get("degraded") or PHRASES.get(rec.get("action"), "(silent)")
-    cv2.putText(img, f"{txt}  goal={np.round(rec.get('goal', []), 1)}", (10, 25),
+    cv2.putText(img, f"{txt}  {_path_text(rec)}", (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     cv2.imshow("PathSense", img)
     return (cv2.waitKey(1) & 0xFF) != ord("q")
@@ -111,7 +109,7 @@ def main():
             d = worker.last_latency_s
             mn = np.min(rec["ranges"]) if "ranges" in rec else float("nan")
             print(f"t={stats['ticks'] / 10:5.1f}s depth={'-' if d is None else f'{d * 1e3:.0f}ms'} "
-                  f"min {mn:.1f}m goal {np.round(rec.get('goal', [np.nan] * 2), 1)} -> "
+                  f"min {mn:.1f}m {_path_text(rec)} -> "
                   f"{rec.get('degraded') or PHRASES.get(rec.get('action'), '(silent)')}", flush=True)
         return show(rec, camera) if a.show else True
 

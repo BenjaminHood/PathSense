@@ -5,10 +5,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ..common.path import PathTracker
 from ..common.types import MAX_RANGE, N_RANGES, Observation
-from ..guidance.cues import (CUE_STOP, PHRASES, STAY_SILENT, CueGate,
-                             action_to_guidance)
-from ..perception.goal import GoalTracker
+from ..guidance.cues import (CUE_LEFT, CUE_RIGHT, CUE_STOP, PHRASES, STAY_SILENT,
+                             CueGate, action_to_guidance)
 from ..perception.ranges import depth_to_ranges
 
 
@@ -16,7 +16,6 @@ from ..perception.ranges import depth_to_ranges
 class RuntimeConfig:
     control_hz: float = 10.0               # = 1 / EnvConfig.dt
     walking_speed: float = 1.2             # = EnvConfig.walker_speed
-    goal_radius: float = 0.8               # = EnvConfig.goal_radius
     max_frame_age_s: float = 0.3
     max_ranges_age_s: float = 0.5
     fov_deg: float = 100.0                 # the policy's fan; set from the checkpoint
@@ -31,7 +30,6 @@ class RuntimeConfig:
 
 class CueSpeedModel:
    
-
     def __init__(self, walking_speed: float):
         self.walking = walking_speed
         self.stopped = False
@@ -47,8 +45,7 @@ class CueSpeedModel:
             self.stopped = False
 
 
-class PerceptionWorker:
-   
+class PerceptionWorker:  
 
     def __init__(self, camera, depth_model, cam, fov_deg=120.0, clock=time.monotonic):
         self.camera, self.depth_model, self.cam = camera, depth_model, cam
@@ -58,6 +55,7 @@ class PerceptionWorker:
         self.last_error = None
         self._lock = threading.Lock()
         self._running = False
+        self._view = None #behind the latest FOV for the depth view
 
     def run_once(self) -> bool:
         frame, t_frame = self.camera.latest()
@@ -69,18 +67,28 @@ class PerceptionWorker:
             depth = self.depth_model(rgb)
             cam = self.cam.resized(depth.shape[1], depth.shape[0])
             ranges = depth_to_ranges(depth, cam, self.fov_deg)
+
         except Exception as e:            # model failure = perception dropout
             self.last_error = repr(e)
+
             return False
+        
         with self._lock:
-            # Timestamp with the FRAME time: the fan is as old as its image.
+            # Timestamp with the frame time
             self._ranges, self._t, self._frame_t = ranges, t_frame, t_frame
+            self._view = (frame, depth)
             self.last_latency_s = time.perf_counter() - t0
+
         return True
 
     def latest(self):
         with self._lock:
             return self._ranges, self._t
+
+    def get_latest_view(self):
+        """The frame and depth view under the latest FOV"""
+        with self._lock:
+            return self._view
 
     def start(self):
         self._running = True
@@ -96,18 +104,23 @@ class PerceptionWorker:
 
 
 class LiveLoop:
+    """Keeps the human safe on the path they are already walking with out a goal.
+
+    The policy sees the depth fan, its speed, and how far its own turn cues
+    have taken the human off their path (PathTracker, fed by optical-flow yaw)"""
+
     def __init__(self, camera, policy_fn, speaker, worker: PerceptionWorker,
-                 goal_tracker: GoalTracker, yaw_estimator=None,
+                 path_tracker: PathTracker | None = None, yaw_estimator=None,
                  cfg: RuntimeConfig | None = None, gate: CueGate | None = None,
                  clock=time.monotonic):
         self.cfg = cfg or RuntimeConfig()
         self.camera, self.policy_fn, self.speaker = camera, policy_fn, speaker
-        self.worker, self.goal_tracker, self.yaw = worker, goal_tracker, yaw_estimator
+        self.worker, self.yaw = worker, yaw_estimator
+        self.path = path_tracker or PathTracker()
         self.gate = gate or CueGate(clock=clock)
         self.speed_model = CueSpeedModel(self.cfg.walking_speed)
         self.clock = clock
         self.degraded_reason = None
-        self.arrived = False
         self._last_frame_t = None
 
     def _say(self, action):
@@ -128,8 +141,7 @@ class LiveLoop:
         fresh = frame is not None and t_frame != self._last_frame_t
         self._last_frame_t = t_frame
         yaw = self.yaw(frame) if (fresh and self.yaw is not None) else 0.0
-        goal = self.goal_tracker.update(dt, self.speed_model.speed, yaw,
-                                        frame if fresh else None)
+        offset = self.path.update(yaw, dt)
         ranges, t_ranges = self.worker.latest()
 
         reason = None
@@ -137,8 +149,6 @@ class LiveLoop:
             reason = "camera"
         elif ranges is None or now - t_ranges > cfg.max_ranges_age_s:
             reason = "perception"
-        elif goal is None:
-            reason = "no_goal"
 
         if reason is not None:
             if self.degraded_reason is None:          # entering degraded mode
@@ -151,15 +161,8 @@ class LiveLoop:
             rec["recovered_from"] = self.degraded_reason
             self.degraded_reason = None
 
-        if np.linalg.norm(goal) <= cfg.goal_radius:
-            if not self.arrived:
-                self.speaker.say("You have arrived")
-                self.arrived = True
-            rec.update(arrived=True, goal=goal)
-            return rec
-
         obs = Observation(ranges=np.clip(ranges, 0, MAX_RANGE).astype(np.float32),
-                          goal_vector=np.asarray(goal, np.float32),
+                          path_offset=offset,
                           speed=float(self.speed_model.speed))
         assert obs.ranges.shape == (N_RANGES,)
         action = int(self.policy_fn(obs.to_array()))
@@ -176,9 +179,12 @@ class LiveLoop:
         spoke = guidance.speak and self._say(action)
         if spoke:
             self.speed_model.on_cue(action)
+            if action in (CUE_LEFT, CUE_RIGHT):
+                self.path.on_turn_cue()    # from now on, count how far they turn
 
         rec.update(action=action, turn=guidance.turn, spoke=spoke,
-                   ranges=obs.ranges, goal=obs.goal_vector, speed=obs.speed,
+                   ranges=obs.ranges, path_offset=offset, tracking=self.path.active,
+                   speed=obs.speed,
                    frame_age_s=now - t_frame, ranges_age_s=now - t_ranges,
                    tick_latency_s=time.perf_counter() - t0)
         return rec
@@ -187,7 +193,7 @@ class LiveLoop:
         period = 1.0 / self.cfg.control_hz
         start = time.monotonic()
         next_t = start
-        while not self.arrived:
+        while True:
             rec = self.step()
             if on_tick is not None and on_tick(rec) is False:
                 break

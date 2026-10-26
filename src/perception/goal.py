@@ -1,6 +1,7 @@
 
 
-# Goal vector is used from an ArUco marker
+# Optical-flow head yaw (feeds the PathTracker), and an ArUco marker goal kept
+# for a future destination layer (the policy itself has no goal).
 import numpy as np
 import cv2
 
@@ -28,12 +29,9 @@ class MarkerGoal:
 
 
 
-def _rot(yaw):
-    c, s = np.cos(yaw), np.sin(yaw)
-    return np.array([[c, -s], [s, c]])
-
-
 class VisualYawEstimator:
+    """Head turn between consecutive frames, from optical flow (+ = left).
+    Feeds the PathTracker in the live loop."""
     
 
     def __init__(self, cam, max_corners=150):
@@ -53,25 +51,3 @@ class VisualYawEstimator:
             return 0.0
         dx = float(np.median((nxt[ok] - pts[ok])[:, 0, 0]))
         return float(np.arctan2(dx, self.cam.fx))
-
-
-class GoalTracker:
-  
-
-    def __init__(self, initial_goal=None, marker=None):
-        self.goal = None if initial_goal is None else np.asarray(initial_goal, np.float64)
-        self.marker = marker
-        self.last_fix_age_s = 0.0 if self.goal is not None else np.inf
-
-    def update(self, dt, speed, yaw_left, frame_bgr=None):
-        if self.goal is not None:
-            # We moved forward speed*dt then turned yaw_left; the goal moves the
-            # opposite way in our frame.
-            self.goal = _rot(-yaw_left) @ (self.goal - np.array([speed * dt, 0.0]))
-            self.last_fix_age_s += dt
-        if self.marker is not None and frame_bgr is not None:
-            fix = self.marker(frame_bgr)
-            if fix is not None:
-                self.goal = np.asarray(fix, np.float64)
-                self.last_fix_age_s = 0.0
-        return None if self.goal is None else self.goal.astype(np.float32)

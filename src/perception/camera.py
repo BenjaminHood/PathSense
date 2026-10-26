@@ -31,18 +31,27 @@ class CameraModel:
                            width, height, self.height_m, self.pitch_rad)
 
     def cropped(self, width: int, height: int) -> "CameraModel":
-        """Same lens, centre-cropped to a new frame size: the focal length in
-        pixels stays put, so the FOV shrinks with the frame. The glasses'
-        stream changes size this way (1472/1408/1392 px wide clips all
-        measure f ~ 1230 px), not by rescaling."""
+        """through the same lens centre-cropped to a new frame size"""
+        # the focal length in pixels stream as it is, so the FOV shrinks with the frame. The glasses'
+        # stream changes size this way (1472/1408/1392 px wide clips all measure f ~ 1230 px), not by rescaling.
         dx, dy = (self.width - width) / 2, (self.height - height) / 2
         return CameraModel(self.fx, self.fy, self.cx - dx, self.cy - dy,
                            width, height, self.height_m, self.pitch_rad)
 
-    def fitted(self, width: int, height: int, mode: str = "crop") -> "CameraModel":
-        """Adapt a calibration to a frame of another size ("crop" or "scale")."""
+    def fitted(self, width: int, height: int, mode: str = "auto") -> "CameraModel":
+        """Adapt a calibration to a frame of another size.
+
+        crop:  same lens, smaller window (focal length in px unchanged)
+        scale: same view, resampled (focal length scales with the frame)
+        auto:  crop when both sides are within 10% of the calibration (the
+               glasses' own small size changes), scale otherwise -- a frame a
+               third the width is a downscaled stream, not a 23 deg window
+        """
         if (width, height) == (self.width, self.height):
             return self
+        if mode == "auto":
+            close = (abs(width / self.width - 1) <= 0.1 and abs(height / self.height - 1) <= 0.1)
+            mode = "crop" if close else "scale"
         return self.cropped(width, height) if mode == "crop" else self.resized(width, height)
 
     @classmethod
