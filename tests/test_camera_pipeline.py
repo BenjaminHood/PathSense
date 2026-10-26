@@ -9,7 +9,7 @@ from src.envs.pathsense_env import PathSenseEnv
 from src.guidance import cues
 from src.guidance.cues import CueGate, action_to_guidance
 from src.perception.camera import CameraModel
-from src.common.path import PathTracker
+from src.perception.goal import GoalTracker
 from src.perception.ranges import depth_to_ranges
 from src.runtime.camera import StaticCamera
 from src.runtime.loop import LiveLoop, PerceptionWorker, RuntimeConfig
@@ -31,7 +31,9 @@ class FakeClock:
 
 def _random_scene(seed):
     """Env obstacles near the walker, in the agent frame, walls pushed far away."""
-    env = PathSenseEnv(EnvConfig(arena_size=1000.0))
+    # circles only, no depth noise: the scene below is the whole world
+    env = PathSenseEnv(EnvConfig(arena_size=1000.0, layout_probs={"room": 1.0},
+                                 box_fraction=0.0, range_noise_std=0.0))
     rng = np.random.default_rng(seed)
     env.reset(seed=seed)
     env.pos, env.heading = np.array([500.0, 500.0]), rng.uniform(-np.pi, np.pi)
@@ -115,35 +117,20 @@ def test_cue_gate_throttles_repeated_stop_only():
     assert gate.allow(cues.CUE_STOP)               # stop after a different cue fires at once
 
 
-# ---------------------------------------------------------------- path tracking
+# ---------------------------------------------------------------- goal tracking
 
-def test_path_tracker_ignores_own_turns_until_a_turn_cue():
-    p = PathTracker()
-    assert p.update(0.5, 0.1) == 0.0 and not p.active      # the wearer's own turn
-    p.on_turn_cue()
-    p.update(np.deg2rad(25), 0.1)                          # the cue lands: 25 deg left
-    assert p.active and np.isclose(p.offset, np.deg2rad(25))
-
-
-def test_path_tracker_settles_back_on_path_and_gives_up():
-    p = PathTracker(on_path_deg=10, settle_s=2.0, max_s=15.0)
-    p.on_turn_cue()
-    p.update(np.deg2rad(25), 0.1)
-    p.update(np.deg2rad(-22), 0.1)                         # steered back to within 10 deg
-    for _ in range(20):
-        p.update(0.0, 0.1)
-    assert not p.active and p.offset == 0.0                # 2 s back on path: done
-    p.on_turn_cue()
-    p.update(np.deg2rad(40), 0.1)
-    for _ in range(150):
-        p.update(0.0, 0.1)
-    assert not p.active                                    # 15 s off path: their choice now
+def test_dead_reckoning_walk_and_turn():
+    g = GoalTracker(initial_goal=[5.0, 0.0])
+    for _ in range(10):
+        g.update(0.1, 1.0, 0.0)
+    np.testing.assert_allclose(g.goal, [4.0, 0.0], atol=1e-9)
+    g.update(0.0, 0.0, np.pi / 2)              # turned left 90° → goal now on the right
+    np.testing.assert_allclose(g.goal, [0.0, -4.0], atol=1e-9)
 
 
-def test_crop_vs_scale_auto():
-    cam = CameraModel(1230.0, 1230.0, 736.0, 984.0, 1472, 1968)
-    assert cam.fitted(1408, 1872).fx == 1230.0             # small change: the glasses crop
-    assert np.isclose(cam.fitted(504, 896).hfov_rad, cam.hfov_rad)   # 1/3 width: downscaled
+def test_marker_fix_overrides_dead_reckoning():
+    g = GoalTracker(initial_goal=[5.0, 0.0], marker=lambda f: np.array([2.0, 1.0]))
+    np.testing.assert_allclose(g.update(0.1, 1.0, 0.0, frame_bgr=np.zeros((4, 4, 3))), [2.0, 1.0])
 
 
 # ---------------------------------------------------------------- live loop
@@ -156,7 +143,7 @@ class ListSpeaker:
         self.said.append(text)
 
 
-def make_loop(policy_action=cues.CUE_RIGHT, cylinders=(), yaw=None):
+def make_loop(policy_action=cues.CUE_RIGHT, goal=(5.0, 0.0), cylinders=()):
     clk = FakeClock()
     cam = CameraModel.from_fov(160, 120, hfov_deg=125)
     depth = render_depth(cam, cylinders=cylinders)
@@ -169,7 +156,7 @@ def make_loop(policy_action=cues.CUE_RIGHT, cylinders=(), yaw=None):
         return policy_action
 
     spk = ListSpeaker()
-    loop = LiveLoop(camera, policy, spk, worker, PathTracker(), yaw_estimator=yaw,
+    loop = LiveLoop(camera, policy, spk, worker, GoalTracker(initial_goal=goal),
                     cfg=RuntimeConfig(fov_deg=FOV), clock=clk)
     return loop, worker, camera, clk, spk, seen
 
@@ -188,6 +175,15 @@ def test_stop_filter_keeps_stop_with_obstacle_ahead():
     assert "stop_filtered" not in rec and rec["action"] == cues.CUE_STOP and spk.said == ["stop"]
 
 
+def test_far_goal_is_fed_in_at_max_goal_distance():
+    from src.common.types import MAX_GOAL, Observation
+    far = Observation(np.full(N_RANGES, MAX_RANGE, np.float32), np.array([60.0, 80.0], np.float32), 1.2)
+    g = far.to_array()[N_RANGES:N_RANGES + 2] * MAX_RANGE
+    np.testing.assert_allclose(g, [0.6 * MAX_GOAL, 0.8 * MAX_GOAL], rtol=1e-5)   # same direction
+    near = Observation(far.ranges, np.array([3.0, -4.0], np.float32), 1.2)
+    np.testing.assert_allclose(near.to_array()[N_RANGES:N_RANGES + 2] * MAX_RANGE, [3.0, -4.0], rtol=1e-6)
+
+
 def test_loop_normal_tick_speaks_policy_cue():
     loop, worker, _, _, spk, seen = make_loop()
     worker.run_once()
@@ -195,19 +191,7 @@ def test_loop_normal_tick_speaks_policy_cue():
     assert rec["action"] == cues.CUE_RIGHT and rec["spoke"]
     assert spk.said == [cues.PHRASES[cues.CUE_RIGHT]]
     assert seen[0].shape == (N_RANGES + 3,)
-    assert seen[0][-3] == 1.0 and seen[0][-2] == 0.0       # on path: (cos 0, sin 0)
-
-
-def test_loop_tracks_how_far_a_turn_cue_takes_the_wearer():
-    turns = iter([0.0, np.deg2rad(25), 0.0])               # optical-flow yaw per fresh frame
-    loop, worker, _, clk, spk, seen = make_loop(yaw=lambda frame: next(turns, 0.0))
-    worker.run_once()
-    assert loop.step()["tracking"]                         # spoken turn cue starts tracking
-    clk.t += 0.1
-    worker.run_once()
-    rec = loop.step()                                      # the wearer turned 25 deg left
-    assert np.isclose(rec["path_offset"], np.deg2rad(25))
-    assert np.isclose(seen[-1][-2], np.sin(np.deg2rad(25)))   # and the policy saw it
+    assert seen[0][-2] == 0.0                      # goal y passed through unchanged
 
 
 def test_loop_safety_override_stops_when_too_close():
@@ -245,3 +229,16 @@ def test_loop_degrades_when_depth_model_fails():
     worker.depth_model = boom
     assert not worker.run_once() and "cuda oom" in worker.last_error
     assert loop.step()["degraded"] == "perception"
+
+
+def test_loop_degrades_without_goal():
+    loop, worker, *_ = make_loop(goal=None)
+    worker.run_once()
+    assert loop.step()["degraded"] == "no_goal"
+
+
+def test_loop_announces_arrival():
+    loop, worker, *_, spk, _ = make_loop(goal=(0.5, 0.0))
+    worker.run_once()
+    assert loop.step()["arrived"]
+    assert spk.said == ["You have arrived"]

@@ -5,6 +5,7 @@ import os
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
+from src.envs.layouts import corners
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 
@@ -58,6 +59,10 @@ def animate_episode(env, policy_fn, seed=0, name="episode.gif",
     _style()
     fig, ax = plt.subplots(figsize=(7, 7.4))
 
+    for w in env.walls:            # walls the walker knows: solid
+        ax.add_patch(plt.Polygon(corners(w), facecolor=AXIS, edgecolor="none", zorder=1))
+    for b in env.boxes:            # clutter: like the circles
+        ax.add_patch(plt.Polygon(corners(b), facecolor=GRID, edgecolor=AXIS, lw=0.8, zorder=1))
     for o in env.obstacles:
         ax.add_patch(plt.Circle(o[:2], o[2], facecolor=GRID,
                                 edgecolor=AXIS, lw=0.8, zorder=1))

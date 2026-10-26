@@ -8,7 +8,8 @@ from src.perception.ranges import depth_to_ranges
 from tests.synthetic import render_depth
 
 scene = [(2.5, 1.0, 0.5), (3.0, -1.5, 0.7)]     # (forward m, left m, radius m)
-env = PathSenseEnv(EnvConfig()); env.reset(seed=0)
+env = PathSenseEnv(EnvConfig(layout_probs={"room": 1.0}, box_fraction=0.0, range_noise_std=0.0))
+env.reset(seed=0)
 env.pos, env.heading = np.array([5.0, 10.0]), 0.0
 env.obstacles = [np.array([5 + f, 10 + l, r]) for f, l, r in scene]
 sim = env._build_observation().ranges

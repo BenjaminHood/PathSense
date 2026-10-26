@@ -45,7 +45,7 @@ def test_obstacle_on_left_lands_in_high_indices():
 
 def test_matches_simulator_same_scene():
     """The key test: camera ranges == sim ranges for an identical scene."""
-    env = PathSenseEnv(EnvConfig())
+    env = PathSenseEnv(EnvConfig(layout_probs={"room": 1.0}, box_fraction=0.0, range_noise_std=0.0))
     env.reset(seed=0)
     env.pos, env.heading = np.array([5.0, 10.0]), 0.0
     scene = [(2.5, 1.0, 0.5), (3.0, -1.5, 0.7)]          # (forward, left, radius)
