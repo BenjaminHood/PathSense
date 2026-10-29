@@ -14,7 +14,7 @@ class PPOConfig:
     hidden_sizes: tuple = (64, 64) #number of neurons in the hidden layers
     
     # rollout
-    total_steps: int = 2000000 #training time steps
+    total_steps: int = 1000000 #training time steps
     rollout_steps: int = 2048 #steps collected per policy update
     epochs: int = 10 #passes over each rollout
     minibatch_size: int = 64

@@ -1,10 +1,5 @@
 """Run the live PathSense pipeline over recorded glasses video.
 
-Drives the real PerceptionWorker + LiveLoop (depth, ranges, path tracking,
-safety override, cue gate, speed model) one frame at a time on a clock taken
-from the video timestamps, so results are deterministic and don't depend on
-how fast the depth model runs.
-
   python -m src.runtime.replay --video glasses.mp4 --annotate
 """
 import argparse
@@ -74,7 +69,7 @@ class RecordingSpeaker:
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
-    ap.add_argument("--checkpoint", default="artifacts/nav_policy.pt")
+    ap.add_argument("--checkpoint", default="artifacts/ben_new/nav_policy.pt")
     ap.add_argument("--camera", default="configs/camera.json", help="calibration file")
     ap.add_argument("--hfov", type=float, default=70.0, help="used if --camera file is missing")
     ap.add_argument("--frame-fit", choices=["auto", "crop", "scale"], default="auto",
@@ -94,6 +89,9 @@ def parse_args():
                          "kept walking, as the recorded footage did")
     ap.add_argument("--out", default="artifacts/replay")
     ap.add_argument("--annotate", action="store_true")
+    ap.add_argument("--depth-view", choices=["blend", "inset", "off"], default="blend",
+                    help="depth map on the annotated video: blended over the scene, a corner "
+                         "picture, or none")
     return ap.parse_args()
 
 
@@ -137,7 +135,7 @@ class Annotator:
         self.cam = cam
         self.depth_view = depth_view
 
-    def __call__(self, frame, rec, said, t, k, depth):
+    def __call__(self, frame, rec, said, t, k, depth=None):
         img = frame.copy()
         show_depth = depth is not None and self.depth_view != "off"
         if show_depth and self.depth_view == "blend":
@@ -216,6 +214,7 @@ class Annotator:
         for i, (txt, c) in enumerate(notes):
             self._put(img, txt, (pad, y_info + line * (i + 1)), 0.62, c, max_w=text_w)
         self._path_dial(img, rec, (comp_cx, pad + int(36 * s) + comp_r), comp_r)
+        return bottom
 
     def _icon(self, img, kind, c, r, color):
         s, (cx, cy) = self.s, c
@@ -392,10 +391,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     out = None
     annotator = Annotator(frame.shape[1], frame.shape[0], np.degrees(cam.hfov_rad),
-                          cfg.fov_deg, cfg.stop_range_m)
-    view = worker.get_latest_view()
-    img = annotator(frame, rec, said, clock.t, k,
-                    depth=None if view is None else view[1])
+                          cfg.fov_deg, cfg.stop_range_m, cam=cam, depth_view=a.depth_view)
     stats = {"ticks": 0, "degraded": 0, "override": 0, "filtered": 0, "spoken": 0,
              "depth_ms": []}
     k = -1
@@ -443,7 +439,9 @@ def main():
                 + ([""] * N_RANGES if ranges is None else [f"{r:.2f}" for r in ranges]))
 
             if a.annotate:
-                img = annotator(frame, rec, said, clock.t, k)
+                view = worker.get_latest_view()
+                img = annotator(frame, rec, said, clock.t, k,
+                                depth=None if view is None else view[1])
                 if out is None:
                     h, w = img.shape[:2]
                     out = cv2.VideoWriter(os.path.join(a.out, "annotated.mp4"),

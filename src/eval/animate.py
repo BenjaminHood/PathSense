@@ -141,7 +141,7 @@ if __name__ == "__main__":
     from src.eval.evaluate import load_policy, greedy, sampled
 
     env = PathSenseEnv(EnvConfig())
-    policy = load_policy(env, "artifacts/nav_policy.pt")
+    policy = load_policy(env, "artifacts/ben_new/nav_policy.pt")
 
     for seed in (3, 7, 11):
         animate_episode(env, sampled(policy), seed=seed,

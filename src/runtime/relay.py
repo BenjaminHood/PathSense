@@ -1,14 +1,4 @@
 """Live PathSense server.
-
-Receives HEVC packets from the phone over WebSocket, decodes them, drives the
-same PerceptionWorker with LiveLoop and sends cue phrases back.
-
-Threads:
-the asyncio loop receives and decodes packets
-PerceptionWorker runs depth in its own thread the control thread steps
-LiveLoop at a fixed control_hz. Keeping depth out of the control thread keeps
-the path tracker honest: its settle/give-up timers count dt = 1 / control_hz
-per tick, so the ticks must really come at that rate however slow depth is.
 """
 import argparse
 import asyncio
@@ -113,7 +103,7 @@ class SerialModel:
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--checkpoint", default="artifacts/nav_policy.pt")
+    ap.add_argument("--checkpoint", default="artifacts/ben_new/nav_policy.pt")
     ap.add_argument("--camera", default="configs/camera.json")
     ap.add_argument("--hfov", type=float, default=70.0)
     ap.add_argument("--frame-fit", choices=["auto", "crop", "scale"], default="auto",
