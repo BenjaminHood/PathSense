@@ -9,10 +9,13 @@ import threading
 import time
 import traceback
 import cv2
-
+import queue as _queue
+import pyttsx3
 import av
 import numpy as np
 import websockets
+import win32com.client
+import pythoncom
 
 from ..common.path import PathTracker
 from ..common.types import N_RANGES
@@ -24,13 +27,39 @@ from .policy import check_fan_coverage, load_policy
 from .replay import Annotator
 
 
+# track real time logs using time module
 class RealClock:
     def __init__(self):
         self.t0 = time.monotonic()
 
     def __call__(self):
         return time.monotonic() - self.t0
+    
+class LocalVoice:
+    """Speak cue phrase on the running device"""
+    def __init__(self, rate=180):
+        self._q = _queue.Queue(maxsize=4)
+        self._rate = rate
+        threading.Thread(target=self._run, daemon=True).start()
+        
+    def _run(self):
+        pythoncom.CoInitialize()                       # COM must be set up per thread
+        voice = win32com.client.Dispatch("SAPI.SpVoice")
+        voice.Rate = 2                                 # SAPI scale is -10..10, not words/min
+        while True:
+            phrase = self._q.get()
+            try:
+                voice.Speak(phrase)                    # blocks until spoken, then loops
+            except Exception as exc:
+                print(f"[voice] {exc}", flush=True)
 
+                
+    def say(self, phrase):
+        try: 
+            self._q.put_nowait(phrase)
+        except _queue.Full:
+            pass      # dropping rather than slowing down the control
+            
 
 class StreamCamera:
     """Camera stand-in fed by the decoder"""
@@ -55,11 +84,14 @@ class StreamCamera:
 class LiveSpeaker:
     """Forwards phrases to the connected phone and keeps them for the log."""
 
-    def __init__(self, aloop, out_q):
+    def __init__(self, aloop, out_q, voice = None):
         self.aloop, self.q, self.said = aloop, out_q, []
+        self.voice = voice
 
     def say(self, text):
         self.said.append(text)
+        if self.voice is not None:
+            self.voice.say(text)    # never blocks : LocalVoice drops when its queue is full
         try:
             self.aloop.call_soon_threadsafe(self.q.put_nowait, text)
         except RuntimeError:               # event loop already closed: shutting down
@@ -122,6 +154,7 @@ def parse_args():
     ap.add_argument("--view-fps", type=float, default=5.0, help="depth-view frames per second sent to the phone")
     ap.add_argument("--depth-view", choices=["blend", "inset", "off"], default="blend")
     ap.add_argument("--show", action="store_true", help="also show how the depth view in a computer window")
+    ap.add_argument("--speak-local", action = "store_true", help= "also speak cues through the laptop's speakers")
     return ap.parse_args()
 
 
@@ -246,6 +279,7 @@ def _tick(sess, log, clock, k):
 
 async def serve(a, clock, state):
     models = asyncio.ensure_future(asyncio.to_thread(load_models, a))
+    voice = LocalVoice() if a.speak_local else None
 
     def end_session():
         sess, state.session = state.session, None
@@ -270,7 +304,7 @@ async def serve(a, clock, state):
         print(f"[relay] phone connected from {ws.remote_address}")
 
         out_q = asyncio.Queue()
-        speaker = LiveSpeaker(asyncio.get_running_loop(), out_q)
+        speaker = LiveSpeaker(asyncio.get_running_loop(), out_q, voice=voice)
         codec = av.CodecContext.create("hevc", "r")
         sess, n_frames, n_bad = None, 0, 0
 
