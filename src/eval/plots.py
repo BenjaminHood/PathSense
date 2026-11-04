@@ -4,6 +4,7 @@ import re
 
 import matplotlib.pyplot as plt
 import numpy as np
+from src.envs.layouts import corners
 
 # ---------------------------------------------------------------- style
 # Validated categorical slots (first three pass all-pairs CVD checks).
@@ -202,6 +203,10 @@ def plot_trajectory(env, policy_fn, seed=0, name="trajectory.png", label=""):
 
     fig, ax = plt.subplots(figsize=(6.4, 6.4))
 
+    for w in env.walls:
+        ax.add_patch(plt.Polygon(corners(w), facecolor=AXIS, edgecolor="none", zorder=1))
+    for b in env.boxes:
+        ax.add_patch(plt.Polygon(corners(b), facecolor=GRID, edgecolor=AXIS, lw=0.8, zorder=1))
     for o in env.obstacles:
         ax.add_patch(plt.Circle(o[:2], o[2], facecolor=GRID,
                                 edgecolor=AXIS, lw=0.8, zorder=1))

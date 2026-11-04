@@ -6,6 +6,7 @@ from ..common.path import PathTracker, wrap
 from ..common.types import Observation, Pose, N_RANGES, MAX_RANGE, OBS_DIM
 from ..guidance.cues import CueGate
 from .config import EnvConfig
+from .layouts import LAYOUTS, rays_circles, rays_rects, rect_clearance
 
 # Actions
 STAY_SILENT, CUE_LEFT, CUE_RIGHT, CUE_STOP, CUE_STRAIGHT = range(5)
@@ -74,11 +75,13 @@ class PathSenseEnv(gym.Env):
             self._rng = np.random.default_rng(seed)
         cfg = self.cfg
 
-        m = 4.0
-        self.pos = self._rng.uniform(m, cfg.arena_size - m, size=2).astype(np.float64)
-        self.path_heading = float(self._rng.uniform(-np.pi, np.pi))   # where THEY want to go
-        self.heading = self.path_heading
-        self.obstacles = self._sample_obstacles()
+        # Layout: walls the walker knows, clutter they don't (src/envs/layouts.py).
+        names = list(cfg.layout_probs)
+        p = np.array([cfg.layout_probs[k] for k in names], float)
+        self.layout = names[int(self._rng.choice(len(names), p=p / p.sum()))]
+        self.walls, self.boxes, circles, self.structured = LAYOUTS[self.layout](self._rng, cfg)
+        self.obstacles = list(circles)
+        self._place_walker()
 
         # Per-episode simulated-human parameters (this is the thing PPO has
         # to learn to be robust to -- it's not observed).
@@ -99,6 +102,7 @@ class PathSenseEnv(gym.Env):
         self.intent = "stopped" if stopped else "straight"
         self.pending_cue = None      # {"type": int, "remaining": int} or None
         self.last_cue_step = {}      # action_id -> step it was last issued
+        self._committed_until = 0    # walker's own wall turn: walk it out before re-deciding
         self.step_count = 0
         self.prev_clearance = self._min_obstacle_clearance()
         self._last_ranges = None
@@ -111,21 +115,60 @@ class PathSenseEnv(gym.Env):
 
         return obs.to_array(), info
 
-    def _sample_obstacles(self):
-        cfg = self.cfg
-        n = int(self._rng.integers(cfg.n_obstacles_range[0], cfg.n_obstacles_range[1] + 1))
-        obstacles = []
-        attempts = 0
-        while len(obstacles) < n and attempts < n * 20:
-            attempts += 1
-            c = self._rng.uniform(2.0, cfg.arena_size - 2.0, size=2)
-            r = self._rng.uniform(*cfg.obstacle_radius_range)
-            if np.linalg.norm(c - self.pos) < 2.0:
+    def _place_walker(self):
+        """A free start, facing somewhere they could actually walk."""
+        size, rng = self.cfg.arena_size, self._rng
+        m = 1.0 if self.structured else 4.0
+        for _ in range(500):
+            self.pos = rng.uniform(m, size - m, size=2).astype(np.float64)
+            if rect_clearance(self.pos, self.walls) < 0.6 or self._clutter_clearance() < 1.5:
                 continue
-            if any(np.linalg.norm(c - o[:2]) < r + o[2] + 0.3 for o in obstacles):
-                continue
-            obstacles.append(np.array([c[0], c[1], r]))
-        return obstacles
+            if self.structured:     # along a corridor / aisle axis, the most open way
+                axes = np.arange(4) * np.pi / 2
+                free = np.array([self._free_length(a) for a in axes])
+                ok = np.flatnonzero(free >= 4.0)
+                a = axes[rng.choice(ok)] if ok.size else axes[np.argmax(free)]
+                self.path_heading = float(wrap(a))
+            else:
+                self.path_heading = float(rng.uniform(-np.pi, np.pi))   # where THEY want to go
+            self.heading = self.path_heading
+            # at least 3 m clear straight ahead, so the first cue has time to land
+            if self._clear_ahead() >= 3.0:
+                break
+
+    def _sweep(self, heading, walls_only):
+        """Free length along heading for a walker's body: three parallel rays,
+        centre and 0.35 m either side, so they can't slide along an edge."""
+        d = np.array([np.cos(heading), np.sin(heading)])
+        side = np.array([-d[1], d[0]])
+        circ = np.array(self.obstacles).reshape(-1, 3)
+        best = np.inf
+        for off in (-0.35, 0.0, 0.35):
+            o, dd = self.pos + off * side, d[None]
+            t = min(self._arena_exit(dd, o)[0], rays_rects(o, dd, self.walls)[0])
+            if not walls_only:
+                t = min(t, rays_rects(o, dd, self.boxes)[0], rays_circles(o, dd, circ)[0])
+            best = min(best, t)
+        return float(best)
+
+    def _clear_ahead(self):
+        return self._sweep(self.heading, walls_only=False)
+
+    def _free_length(self, heading):
+        """How far the walker could go this way past the walls they know (not clutter)."""
+        return self._sweep(heading, walls_only=True)
+
+    def _clutter_clearance(self):
+        circ = np.array(self.obstacles).reshape(-1, 3)
+        c = (np.linalg.norm(self.pos - circ[:, :2], axis=1) - circ[:, 2]).min() if len(circ) else np.inf
+        return min(c, rect_clearance(self.pos, self.boxes))
+
+    def _arena_exit(self, dirs, origin=None):
+        size = self.cfg.arena_size
+        p = self.pos if origin is None else origin
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = np.where(dirs > 0, (size - p) / dirs, np.where(dirs < 0, -p / dirs, np.inf))
+        return np.maximum(t.min(axis=1), 0.0)
 
     def step(self, action):
         cfg = self.cfg
@@ -167,11 +210,19 @@ class PathSenseEnv(gym.Env):
         # 4. Walker dynamics. Heading noise is their own wandering while
         #    walking, so it moves their path too; a cue-induced turn is held
         #    until another cue (they don't drift back by themselves).
+        #    In corridors and aisles their path is the layout's axis: noise is
+        #    veering off it, partly corrected by feel (cane on the wall).
         step = np.zeros(2)
         if self.intent != "stopped":
             noise = self._rng.normal(0.0, self.heading_noise_std)
             self.heading = wrap(self.heading + noise)
-            self.path_heading = wrap(self.path_heading + noise)
+            if not self.structured:
+                self.path_heading = wrap(self.path_heading + noise)
+            else:
+                if not self.tracker.active:
+                    self.heading = wrap(self.heading + cfg.self_correct_rate
+                                        * wrap(self.path_heading - self.heading))
+                self.heading = wrap(self.heading + self._cane())
             step = cfg.walker_speed * self.dt * np.array([np.cos(self.heading), np.sin(self.heading)])
         else:
             reward += cfg.reward_stopped
@@ -182,7 +233,7 @@ class PathSenseEnv(gym.Env):
         was_tracking = self.tracker.active
         self.tracker.update(wrap(self.heading - heading_before), self.dt)
         if was_tracking and not self.tracker.active:
-            self.path_heading = self.heading
+            self.path_heading = self._snap(self.heading)
 
         # 5. Progress along the walker's own intended path.
         progress = float(step @ np.array([np.cos(self.path_heading), np.sin(self.path_heading)]))
@@ -230,24 +281,55 @@ class PathSenseEnv(gym.Env):
         elif cue_type == CUE_STRAIGHT:
             self.intent = "straight"
 
+    def _cane(self):
+        """Turn (rad) away from a known wall within cane reach, on either side."""
+        reach = self.cfg.cane_reach_m
+        h = self.heading
+        sides = np.array([[np.cos(h + a), np.sin(h + a)] for a in (np.pi / 3, -np.pi / 3)])
+        left, right = np.minimum(rays_rects(self.pos, sides, self.walls), self._arena_exit(sides))
+        if min(left, right) >= reach:
+            return 0.0
+        return -0.1 if left < right else 0.1     # + = turn left
+
+    def _snap(self, heading):
+        """In corridors/aisles a path runs along an axis; elsewhere it is free."""
+        if not self.structured:
+            return heading
+        return wrap(np.round(heading / (np.pi / 2)) * np.pi / 2)
+
     def _update_intent(self):
-        """The walker's own turns. They turn by the same amount as their path,
-        and hold them off while an avoidance turn is in progress."""
+        """The walker's own turns, around the walls they know (not the clutter).
+        They hold them off while an avoidance turn is in progress."""
         if self.tracker.active:
             return
-        cfg = self.cfg
+        cfg, rng = self.cfg, self._rng
+        # in a building they know the walls, so they turn later (cross-aisles are short)
+        look = min(cfg.wall_lookahead_m, 1.5) if self.structured else cfg.wall_lookahead_m
+        if self.step_count < self._committed_until:      # just turned: walk it out first
+            return
         turn = 0.0
         if self.step_count >= self.next_intent_change:
-            lo, hi = np.deg2rad(cfg.intent_turn_deg_range)
-            turn = float(self._rng.uniform(lo, hi) * self._rng.choice([-1, 1]))
-            self.next_intent_change = self.step_count + int(
-                self._rng.integers(*cfg.intent_change_steps_range))
-        ahead = self.pos + cfg.wall_lookahead_m * np.array(
-            [np.cos(self.path_heading + turn), np.sin(self.path_heading + turn)])
-        if np.any(ahead < 1.0) or np.any(ahead > cfg.arena_size - 1.0):
-            to_centre = np.full(2, cfg.arena_size / 2.0) - self.pos
-            new = np.arctan2(to_centre[1], to_centre[0]) + self._rng.uniform(-np.pi / 4, np.pi / 4)
-            turn = wrap(new - self.path_heading)
+            # their own choice: a side corridor in a building, any angle in a room;
+            # if that way is a wall, try again next step (i.e. at the next junction)
+            if self.structured:
+                t = float(np.pi / 2 * rng.choice([-1, 1]))
+            else:
+                lo, hi = np.deg2rad(cfg.intent_turn_deg_range)
+                t = float(rng.uniform(lo, hi) * rng.choice([-1, 1]))
+            if self._free_length(self.path_heading + t) >= look:
+                turn = t
+                self.next_intent_change = self.step_count + int(
+                    rng.integers(*cfg.intent_change_steps_range))
+        if not turn and self._free_length(self.path_heading) < look:
+            # wall or dead end ahead: take the most open way they know of
+            # (a U-turn only if nothing else is open)
+            opts = np.deg2rad([90, -90, 180] if self.structured else [45, -45, 90, -90, 135, -135])
+            free = np.array([self._free_length(self.path_heading + o) for o in opts])
+            ok = np.flatnonzero(free >= look)
+            if ok.size > 1 and self.structured:
+                ok = ok[opts[ok] != np.pi]
+            turn = float(opts[rng.choice(ok)] if ok.size else opts[np.argmax(free)])
+            self._committed_until = self.step_count + 5      # < 1 m, inside the look-ahead
         if turn:
             self.path_heading = wrap(self.path_heading + turn)
             self.heading = wrap(self.heading + turn)
@@ -255,29 +337,24 @@ class PathSenseEnv(gym.Env):
     # Geometry helpers
     def _min_obstacle_clearance(self):
         size = self.cfg.arena_size
-        walls = min(self.pos[0], self.pos[1], size - self.pos[0], size - self.pos[1])
-        if not self.obstacles:
-            return walls
-        return min(walls, min(np.linalg.norm(self.pos - o[:2]) - o[2] for o in self.obstacles))
+        arena = min(self.pos[0], self.pos[1], size - self.pos[0], size - self.pos[1])
+        return min(arena, rect_clearance(self.pos, self.walls), self._clutter_clearance())
 
     def _build_observation(self, lag=False) -> Observation:
         cfg = self.cfg
         half_fov = np.deg2rad(cfg.fov_deg) / 2.0
         offsets = np.linspace(-half_fov, half_fov, N_RANGES)
-        ranges = np.full(N_RANGES, MAX_RANGE, dtype=np.float32)
-
-        box_min = np.array([0.0, 0.0])
-        box_max = np.array([cfg.arena_size, cfg.arena_size])
-
-        for i, off in enumerate(offsets):
-            theta = self.heading + off
-            direction = np.array([np.cos(theta), np.sin(theta)])
-            best = _ray_box_hit(self.pos, direction, box_min, box_max) or MAX_RANGE
-            for obs in self.obstacles:
-                hit = _ray_circle_hit(self.pos, direction, obs[:2], obs[2])
-                if hit is not None and hit < best:
-                    best = hit
-            ranges[i] = min(best, MAX_RANGE)
+        theta = self.heading + offsets
+        dirs = np.stack([np.cos(theta), np.sin(theta)], axis=1)
+        hits = np.minimum.reduce([
+            self._arena_exit(dirs),
+            rays_rects(self.pos, dirs, self.walls),
+            rays_rects(self.pos, dirs, self.boxes),
+            rays_circles(self.pos, dirs, np.array(self.obstacles).reshape(-1, 3)),
+        ])
+        if cfg.range_noise_std:        # depth from a camera is never exact
+            hits = hits * (1.0 + self._rng.normal(0.0, cfg.range_noise_std, N_RANGES))
+        ranges = np.clip(hits, 0.0, MAX_RANGE).astype(np.float32)
 
         if lag:
             # Live depth is slower than the control loop, so sometimes the

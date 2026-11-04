@@ -224,7 +224,8 @@ def train(cfg: PPOConfig, env=None, live=True, block=True):
     env.close()
     
     history = plot.close(block=block) if plot else []
-    os.makedirs("artifacts", exist_ok=True)
+    # create the checkpoint's own folder (e.g. artifacts/ben_new/), not just artifacts/
+    os.makedirs(os.path.dirname(cfg.save_path) or ".", exist_ok=True)
     # save the policy, plus the env config so the runtime can match its fan (fov_deg)
     # CPU tensors, so the checkpoint loads on machines without a GPU
     state = {k: v.cpu() for k, v in policy.state_dict().items()}

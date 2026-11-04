@@ -16,6 +16,21 @@ class EnvConfig:
     near_miss_margin: float = 0.6           # only penalised while closing in on an obstacle
     n_obstacles_range: tuple = (4, 10)
     obstacle_radius_range: tuple = (0.3, 0.9)
+
+    # layouts (src/envs/layouts.py), one sampled per episode
+    layout_probs: dict = None               # default below: room 0.3, corridors 0.45, aisles 0.25
+    box_fraction: float = 0.5               # share of room obstacles that are boxes, not circles
+    box_half_size_range: tuple = (0.2, 0.8) # half width/depth of room furniture, metres
+    corridor_width_range: tuple = (1.5, 3.0)
+    min_block_m: float = 2.0                # smallest wall block between corridors
+    aisle_width_range: tuple = (1.2, 2.5)
+    corridor_clutter_range: tuple = (2, 7)  # bins, chairs, people per corridor / per hall
+    min_gap_m: float = 0.9                  # clutter always leaves at least this much room
+    self_correct_rate: float = 0.03         # in corridors the walker drifts back towards
+                                            #   their line (shorelining), this fraction a step
+    cane_reach_m: float = 0.6               # in corridors they feel a wall this close and
+                                            #   steer off it themselves (not clutter)
+    range_noise_std: float = 0.05           # relative depth noise on each ray (live ~5-10%)
     reaction_delay_range: tuple = (1, 4)
     compliance_range: tuple = (0.7, 1.0)
     heading_noise_std_range: tuple = (0.01, 0.05)
@@ -35,3 +50,7 @@ class EnvConfig:
     reward_collision: float = -10.0
     reward_near_miss: float = -0.5
     reward_stopped: float = -0.03           # per step standing still, so stopping isn't free
+
+    def __post_init__(self):
+        if self.layout_probs is None:
+            self.layout_probs = {"room": 0.3, "corridors": 0.45, "aisles": 0.25}
