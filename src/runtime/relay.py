@@ -1,5 +1,5 @@
-"""Live PathSense server.
-"""
+"""Live PathSense server."""
+
 import argparse
 import asyncio
 import csv
@@ -91,10 +91,10 @@ class LiveSpeaker:
     def say(self, text):
         self.said.append(text)
         if self.voice is not None:
-            self.voice.say(text)    # never blocks : LocalVoice drops when its queue is full
+            self.voice.say(text) # never blocks : LocalVoice drops when its queue is full
         try:
             self.aloop.call_soon_threadsafe(self.q.put_nowait, text)
-        except RuntimeError:               # event loop already closed: shutting down
+        except RuntimeError: # event loop already closed: shutting down
             pass
 
     def pop(self):
@@ -116,7 +116,7 @@ class LiveViewer:
             self.q.put_nowait(jpeg)
         try:
             self.aloop.call_soon_threadsafe(put)
-        except RuntimeError:               # event loop already closed: shutting down
+        except RuntimeError: # event loop already closed: shutting down
             pass
 
 
@@ -135,7 +135,7 @@ class SerialModel:
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--checkpoint", default="artifacts/ben_new/nav_policy.pt")
+    ap.add_argument("--checkpoint", default="artifacts/ben_new/nav_policy.pt") #checkpoint lookup
     ap.add_argument("--camera", default="configs/camera.json")
     ap.add_argument("--hfov", type=float, default=70.0)
     ap.add_argument("--frame-fit", choices=["auto", "crop", "scale"], default="auto",
@@ -163,8 +163,8 @@ def load_models(a):
     from ..perception.depth import DepthAnythingMetric
 
     print("loading depth model ...", flush=True)
-    depth_model = DepthAnythingMetric(scale=a.depth_scale)
-    depth_model(np.zeros((480, 640, 3), np.uint8))     # warm-up: first call is slow
+    depth_model = DepthAnythingMetric(scale=a.depth_scale) #calls the depth model
+    depth_model(np.zeros((480, 640, 3), np.uint8)) # warm-up: first call is slow
     policy = load_policy(a.checkpoint, sample=not a.greedy, seed=a.seed)
     return SerialModel(depth_model), policy
 
@@ -209,13 +209,14 @@ class RelayState:
 LOG_HEADER = (["frame", "t", "degraded", "policy_action", "action", "cue", "said",
                "override", "stop_filtered", "min_range", "path_offset_deg", "tracking",
                "speed", "depth_ms"]
-              + [f"r{i}" for i in range(N_RANGES)])      # same columns as replay.py
+              + [f"r{i}" for i in range(N_RANGES)])# same columns as replay.py
 
 
 def control_thread(state, a, clock, stop_evt):
     """Steps the active session's LiveLoop at control_hz and logs every tick."""
     period = 1.0 / a.control_hz
     os.makedirs(a.out, exist_ok=True)
+    # logs start in csv
     with open(os.path.join(a.out, "log.csv"), "w", newline="") as f:
         log = csv.writer(f)
         log.writerow(LOG_HEADER)
@@ -230,8 +231,7 @@ def control_thread(state, a, clock, stop_evt):
                     failing = None
                 except Exception as e:
                     if failing is None:
-                        # A dead control loop means silence, which the walker
-                        # hears as "carry on". Say stop once, then keep retrying.
+                        # A dead control loop means silence
                         sess.speaker.say(PHRASES[CUE_STOP])
                     if repr(e) != failing:
                         traceback.print_exc()
@@ -276,7 +276,7 @@ def _tick(sess, log, clock, k):
         print(f"{k:5d} | {('%.0f' % (ms * 1e3)) if ms else '--':>4}ms | "
               f"min {mn} m | {rec.get('degraded') or PHRASES.get(rec.get('action'), 'silent')}{off}")
 
-
+# depth model serve
 async def serve(a, clock, state):
     models = asyncio.ensure_future(asyncio.to_thread(load_models, a))
     voice = LocalVoice() if a.speak_local else None
@@ -320,7 +320,7 @@ async def serve(a, clock, state):
         send_task = asyncio.create_task(sender())
         try:
             async for message in ws:
-                if state.ws is not ws:             # a newer connection took over
+                if state.ws is not ws:# a newer connection took over
                     break
                 if isinstance(message, str):
                     continue
@@ -341,8 +341,7 @@ async def serve(a, clock, state):
                     h, w = img.shape[:2]
                     if sess is None or sess.size != (w, h):
                         sess = open_session(w, h, speaker)
-                    # Stamped on arrival: the phone sends no capture time, so
-                    # network delay is not counted in the frame's age.
+                    # Stamped on arrival, but network delay is not counted.
                     sess.camera.push(img, clock())
                     state.session = sess
         finally:
@@ -362,6 +361,7 @@ async def serve(a, clock, state):
 
 def main():
     a = parse_args()
+    # init time stamping
     clock, state, stop_evt = RealClock(), RelayState(), threading.Event()
     ctrl = threading.Thread(target=control_thread, args=(state, a, clock, stop_evt),
                             daemon=True)

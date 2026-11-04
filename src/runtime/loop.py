@@ -14,16 +14,13 @@ from ..perception.ranges import depth_to_ranges
 
 @dataclass
 class RuntimeConfig:
-    control_hz: float = 10.0               # = 1 / EnvConfig.dt
-    walking_speed: float = 1.2             # = EnvConfig.walker_speed
+    control_hz: float = 10.0 # = 1 
+    walking_speed: float = 1.2  
     max_frame_age_s: float = 0.3
     max_ranges_age_s: float = 0.5
-    fov_deg: float = 100.0                 # the policy's fan; set from the checkpoint
-    stop_range_m: float = 0.5              # safety override: anything closer → STOP
-    # Stop filter: a "stop" from the policy only counts if something is within
-    # stop_filter_m inside the walking path (rays within ±stop_filter_deg of
-    # straight ahead, ~0.4 m either side at 1.5 m). Otherwise it's treated as
-    # silence. None disables the filter.
+    fov_deg: float = 100.0 
+    stop_range_m: float = 0.5              
+
     stop_filter_m: float | None = 1.5
     stop_filter_deg: float = 15.0
 
